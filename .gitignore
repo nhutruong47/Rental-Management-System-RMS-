@@ -1,0 +1,21 @@
+# Java / Maven
+backend/target/
+*.class
+
+# Node / frontend
+frontend/node_modules/
+frontend/.next/
+frontend/dist/
+frontend/coverage/
+*.tsbuildinfo
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Local tools and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,36 @@
+spring:
+  application:
+    name: rental-management-api
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/rms}
+    username: ${DB_USERNAME:rms}
+    password: ${DB_PASSWORD:local-rms-password}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+server:
+  port: ${SERVER_PORT:8080}
+  error:
+    include-message: never
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        secure: ${SESSION_COOKIE_SECURE:false}
+        same-site: lax
+        name: RMSSESSION
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never

@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: rms
+      POSTGRES_USER: rms
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-local-rms-password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - rms-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rms -d rms"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/rms
+      DB_USERNAME: rms
+      DB_PASSWORD: ${DB_PASSWORD:-local-rms-password}
+      SESSION_COOKIE_SECURE: "false"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -q -O - http://localhost:8080/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  rms-postgres-data:
