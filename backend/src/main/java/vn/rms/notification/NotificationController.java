@@ -2,6 +2,7 @@ package vn.rms.notification;
 
 import java.util.List;
 import java.util.UUID;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -20,11 +21,13 @@ public class NotificationController {
     }
 
     @GetMapping
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public List<NotificationService.NotificationResponse> list(@AuthenticationPrincipal RmsUserPrincipal principal) {
         return notifications.list(principal.organizationId());
     }
 
     @PostMapping("/{notificationId}/read")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public NotificationService.NotificationResponse markRead(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                            @PathVariable UUID notificationId) {
         return notifications.markRead(principal.organizationId(), notificationId);

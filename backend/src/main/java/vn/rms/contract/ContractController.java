@@ -8,6 +8,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,12 +29,14 @@ public class ContractController {
     }
 
     @GetMapping
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public java.util.List<ContractService.ContractResponse> list(@AuthenticationPrincipal RmsUserPrincipal principal) {
         return contracts.listDtos(principal.organizationId());
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public ContractService.ContractResponse create(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                    @Valid @RequestBody CreateContractRequest request) {
         return contracts.createDto(principal.organizationId(), request.roomId(), request.tenantId(),
@@ -41,12 +44,14 @@ public class ContractController {
     }
 
     @PostMapping("/{contractId}/activate")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public ContractService.ContractResponse activate(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                      @PathVariable UUID contractId) {
         return contracts.activateDto(principal.organizationId(), contractId);
     }
 
     @PostMapping("/{contractId}/terminate")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public ContractService.HandoverResponse terminate(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                       @PathVariable UUID contractId,
                                                       @Valid @RequestBody TerminateContractRequest request) {
@@ -56,6 +61,7 @@ public class ContractController {
     }
 
     @GetMapping("/{contractId}/handover")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public ContractService.HandoverResponse handover(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                      @PathVariable UUID contractId) {
         return contracts.getHandover(principal.organizationId(), contractId);

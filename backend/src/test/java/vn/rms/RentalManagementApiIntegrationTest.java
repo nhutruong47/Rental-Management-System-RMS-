@@ -599,6 +599,171 @@ class RentalManagementApiIntegrationTest {
                 .andExpect(status().isNotFound());
     }
 
+    @Test
+    void ownerCanInviteStaffAndProvisionTenantPortalWithStrictRbacAndIdorIsolation() throws Exception {
+        MockHttpSession owner = registerAndSignIn("rbac-owner-" + UUID.randomUUID() + "@example.test", "Nhà Phân Quyền");
+        String propertyId = createProperty(owner);
+        createRoom(owner, propertyId, "R101", 3500000).andExpect(status().isCreated());
+        createRoom(owner, propertyId, "R102", 3500000).andExpect(status().isCreated());
+        MvcResult roomsResult = mockMvc.perform(authenticated(get("/api/properties/" + propertyId + "/rooms"), owner))
+                .andExpect(status().isOk()).andReturn();
+        String room1Id = jsonValue(roomsResult, "$[0].id");
+        String room2Id = jsonValue(roomsResult, "$[1].id");
+        String tenantId = createTenant(owner);
+        String contractId = createContract(owner, room1Id, tenantId, "2026-11-01", "2027-10-31");
+        mockMvc.perform(authenticated(post("/api/contracts/" + contractId + "/activate"), owner))
+                .andExpect(status().isOk());
+
+        String staffEmail = "staff-" + UUID.randomUUID() + "@example.test";
+        mockMvc.perform(authenticated(post("/api/members"), owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"%s","password":"StaffPass!2345","fullName":"Nhân Viên A","role":"STAFF"}
+                                """.formatted(staffEmail)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.role").value("STAFF"));
+
+        MockHttpSession staffSession = signInWith(staffEmail, "StaffPass!2345");
+        mockMvc.perform(authenticated(post("/api/properties"), staffSession)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name":"Blocked","address":"Addr"}
+                                """))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(authenticated(get("/api/audit-logs"), staffSession))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(authenticated(post("/api/maintenance-tickets"), staffSession)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"roomId":"%s","title":"Đèn cầu thang","description":"Kiểm tra bóng đèn","priority":"LOW","estimatedCost":50000}
+                                """.formatted(room1Id)))
+                .andExpect(status().isCreated());
+
+        String tenantEmail = "tenant-portal-" + UUID.randomUUID() + "@example.test";
+        mockMvc.perform(authenticated(post("/api/tenants/" + tenantId + "/portal-account"), owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"%s","password":"TenantPass!234"}
+                                """.formatted(tenantEmail)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.role").value("TENANT"));
+
+        MockHttpSession tenantSession = signInWith(tenantEmail, "TenantPass!234");
+        mockMvc.perform(authenticated(get("/api/properties"), tenantSession))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(authenticated(get("/api/tenant-portal/overview"), tenantSession))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.contracts[0].roomId").value(room1Id));
+        mockMvc.perform(authenticated(post("/api/tenant-portal/tickets"), tenantSession)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"roomId":"%s","title":"Báo hỏng khóa","description":"Không khóa được","priority":"HIGH"}
+                                """.formatted(room1Id)))
+                .andExpect(status().isCreated());
+        mockMvc.perform(authenticated(post("/api/tenant-portal/tickets"), tenantSession)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"roomId":"%s","title":"IDOR test","description":"Phòng người khác","priority":"LOW"}
+                                """.formatted(room2Id)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void ownerCanConfigureSettingsAdjustDraftInvoiceAndInspectAuditLogs() throws Exception {
+        MockHttpSession owner = registerAndSignIn("settings-" + UUID.randomUUID() + "@example.test", "Nhà Dịch Vụ");
+        mockMvc.perform(authenticated(post("/api/settings"), owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"billingDueDay":10,"internetFee":100000,"garbageFee":30000,"parkingFee":50000}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.internetFee").value(100000));
+
+        String propertyId = createProperty(owner);
+        createRoom(owner, propertyId, "D101", 3000000).andExpect(status().isCreated());
+        String roomId = jsonValue(mockMvc.perform(authenticated(get("/api/properties/" + propertyId + "/rooms"), owner))
+                .andExpect(status().isOk()).andReturn(), "$[0].id");
+        String tenantId = createTenant(owner);
+        String contractId = createContract(owner, roomId, tenantId, "2026-11-01", "2027-10-31");
+        mockMvc.perform(authenticated(post("/api/contracts/" + contractId + "/activate"), owner))
+                .andExpect(status().isOk());
+
+        MvcResult generated = mockMvc.perform(authenticated(post("/api/invoices/generate"), owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"billingPeriod":"2026-11"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].serviceAmount").value(180000))
+                .andExpect(jsonPath("$[0].totalAmount").value(3180000))
+                .andReturn();
+        String invoiceId = jsonValue(generated, "$[0].id");
+
+        mockMvc.perform(authenticated(post("/api/invoices/" + invoiceId + "/adjust"), owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"serviceAmount":200000,"discountAmount":100000,"adjustmentNotes":"Giảm phí tháng đầu"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalAmount").value(3100000));
+
+        mockMvc.perform(authenticated(post("/api/invoices/" + invoiceId + "/issue"), owner))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(authenticated(post("/api/invoices/" + invoiceId + "/adjust"), owner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"serviceAmount":0,"discountAmount":0,"adjustmentNotes":"Sửa sau phát hành"}
+                                """))
+                .andExpect(status().isConflict());
+
+        mockMvc.perform(authenticated(get("/api/audit-logs"), owner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].action").isNotEmpty());
+    }
+
+    @Test
+    void loginRateLimiterBlocksExcessiveAttemptsAndUserCanChangePassword() throws Exception {
+        String email = "ratelimit-" + UUID.randomUUID() + "@example.test";
+        MockHttpSession session = registerAndSignIn(email, "Nhà Bảo Mật");
+
+        mockMvc.perform(authenticated(post("/api/auth/change-password"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"currentPassword":"LocalPass!234","newPassword":"NewSecurePass!999"}
+                                """))
+                .andExpect(status().isNoContent());
+
+        signInWith(email, "NewSecurePass!999");
+
+        String rateTarget = "victim-" + UUID.randomUUID() + "@example.test";
+        for (int i = 0; i < 10; i++) {
+            mockMvc.perform(post("/api/auth/login").with(csrf())
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"email":"%s","password":"WrongPassword123!"}
+                                    """.formatted(rateTarget)))
+                    .andExpect(status().isUnauthorized());
+        }
+        mockMvc.perform(post("/api/auth/login").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"%s","password":"WrongPassword123!"}
+                                """.formatted(rateTarget)))
+                .andExpect(status().isTooManyRequests());
+    }
+
+    private MockHttpSession signInWith(String email, String password) throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/auth/login").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"%s","password":"%s"}
+                                """.formatted(email, password)))
+                .andExpect(status().isOk())
+                .andReturn();
+        return (MockHttpSession) result.getRequest().getSession(false);
+    }
+
     private ResultActions createMeterReading(MockHttpSession session, String roomId, String utilityType,
                                              long currentReading) throws Exception {
         return mockMvc.perform(authenticated(post("/api/meter-readings"), session)

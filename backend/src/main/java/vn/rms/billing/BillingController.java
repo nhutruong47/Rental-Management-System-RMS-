@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -31,32 +32,48 @@ public class BillingController {
     }
 
     @PostMapping("/generate")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public List<BillingService.InvoiceResponse> generate(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                          @Valid @RequestBody GenerateRequest request) {
         return billing.generateDtos(principal.organizationId(), request.billingPeriod());
     }
 
     @GetMapping
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public List<BillingService.InvoiceResponse> list(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                      @org.springframework.web.bind.annotation.RequestParam
                                                      @DateTimeFormat(pattern = "yyyy-MM") YearMonth billingPeriod) {
         return billing.listDtos(principal.organizationId(), billingPeriod);
     }
 
+    @PostMapping("/{invoiceId}/adjust")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public BillingService.InvoiceResponse adjust(@AuthenticationPrincipal RmsUserPrincipal principal,
+                                                 @PathVariable UUID invoiceId,
+                                                 @Valid @RequestBody AdjustInvoiceRequest request) {
+        return billing.adjust(principal.organizationId(), principal.userId(), principal.email(), invoiceId,
+                request.serviceAmount(), request.discountAmount(), request.adjustmentNotes());
+    }
+
     @PostMapping("/{invoiceId}/issue")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public BillingService.InvoiceResponse issue(@AuthenticationPrincipal RmsUserPrincipal principal, @PathVariable UUID invoiceId) {
-        return billing.issueDto(principal.organizationId(), invoiceId);
+        return billing.issueDto(principal.organizationId(), principal.userId(), principal.email(), invoiceId);
     }
 
     @PostMapping("/{invoiceId}/payments")
     @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public PaymentResponse payment(@AuthenticationPrincipal RmsUserPrincipal principal, @PathVariable UUID invoiceId,
                                    @Valid @RequestBody RecordPaymentRequest request) {
-        return PaymentResponse.from(billing.recordPayment(principal.organizationId(), principal.userId(), invoiceId,
-                request.amount(), request.method(), request.reference(), request.idempotencyKey()));
+        return PaymentResponse.from(billing.recordPayment(principal.organizationId(), principal.userId(),
+                principal.email(), invoiceId, request.amount(), request.method(), request.reference(), request.idempotencyKey()));
     }
 
     public record GenerateRequest(@NotNull @DateTimeFormat(pattern = "yyyy-MM") YearMonth billingPeriod) { }
+    public record AdjustInvoiceRequest(@NotNull @DecimalMin("0") BigDecimal serviceAmount,
+                                       @NotNull @DecimalMin("0") BigDecimal discountAmount,
+                                       @Size(max = 300) String adjustmentNotes) { }
     public record RecordPaymentRequest(@NotNull @DecimalMin(value = "1") BigDecimal amount,
                                        @NotNull PaymentMethod method,
                                        @NotBlank @Size(max = 120) String reference,

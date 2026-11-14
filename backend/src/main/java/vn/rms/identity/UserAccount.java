@@ -63,4 +63,12 @@ public class UserAccount {
     public boolean isEnabled() {
         return enabled;
     }
+
+    public void setPasswordHash(String passwordHash) {
+        this.passwordHash = passwordHash;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
+    }
 }

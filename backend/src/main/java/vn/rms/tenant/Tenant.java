@@ -19,6 +19,9 @@ public class Tenant {
     @Column(name = "organization_id", nullable = false)
     private UUID organizationId;
 
+    @Column(name = "user_id")
+    private UUID userId;
+
     @Column(name = "full_name", nullable = false, length = 120)
     private String fullName;
 
@@ -40,8 +43,10 @@ public class Tenant {
         this.email = email;
     }
 
+    public void linkUser(UUID userId) { this.userId = userId; }
     public UUID getId() { return id; }
     public UUID getOrganizationId() { return organizationId; }
+    public UUID getUserId() { return userId; }
     public String getFullName() { return fullName; }
     public String getPhone() { return phone; }
     public String getEmail() { return email; }

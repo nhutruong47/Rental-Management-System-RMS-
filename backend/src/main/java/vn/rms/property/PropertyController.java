@@ -11,6 +11,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -32,11 +33,13 @@ public class PropertyController {
     }
 
     @GetMapping
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public List<PropertyService.PropertyResponse> list(@AuthenticationPrincipal RmsUserPrincipal principal) {
         return service.listProperties(principal.organizationId());
     }
 
     @GetMapping("/{propertyId}")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public PropertyService.PropertyResponse get(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                 @PathVariable UUID propertyId) {
         return service.getProperty(principal.organizationId(), propertyId);
@@ -44,12 +47,14 @@ public class PropertyController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public PropertyService.PropertyResponse create(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                    @Valid @RequestBody CreatePropertyRequest request) {
         return service.createProperty(principal.organizationId(), request.name(), request.address());
     }
 
     @GetMapping("/{propertyId}/rooms")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public List<PropertyService.RoomResponse> rooms(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                     @PathVariable UUID propertyId) {
         return service.listRooms(principal.organizationId(), propertyId);
@@ -57,6 +62,7 @@ public class PropertyController {
 
     @PostMapping("/{propertyId}/rooms")
     @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public PropertyService.RoomResponse createRoom(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                    @PathVariable UUID propertyId,
                                                    @Valid @RequestBody CreateRoomRequest request) {
@@ -65,6 +71,7 @@ public class PropertyController {
     }
 
     @PostMapping("/{propertyId}/rooms/{roomId}/status")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public PropertyService.RoomResponse updateRoomStatus(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                          @PathVariable UUID propertyId,
                                                          @PathVariable UUID roomId,

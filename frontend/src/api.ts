@@ -1,3 +1,4 @@
+export type MembershipRole = 'OWNER' | 'MANAGER' | 'STAFF' | 'TENANT';
 export type Property = { id: string; name: string; address: string };
 export type RoomStatusValue = 'AVAILABLE' | 'OCCUPIED' | 'MAINTENANCE' | 'INACTIVE';
 export type Room = {
@@ -10,7 +11,7 @@ export type Room = {
   depositAmount: number;
   status: RoomStatusValue;
 };
-export type Tenant = { id: string; fullName: string; phone?: string; email?: string };
+export type Tenant = { id: string; fullName: string; phone?: string; email?: string; hasPortalAccount?: boolean };
 export type Contract = {
   id: string;
   roomId: string;
@@ -43,6 +44,9 @@ export type Invoice = {
   rentAmount: number;
   electricityAmount: number;
   waterAmount: number;
+  serviceAmount?: number;
+  discountAmount?: number;
+  adjustmentNotes?: string;
   totalAmount: number;
   amountPaid: number;
   balanceDue: number;
@@ -90,7 +94,56 @@ export type SessionAccount = {
   organizationId: string;
   organizationName: string;
   email: string;
-  role: string;
+  role: MembershipRole | string;
+};
+export type Member = {
+  membershipId: string;
+  userId: string;
+  fullName: string;
+  email: string;
+  role: MembershipRole;
+  active: boolean;
+  createdAt: string;
+};
+export type OrganizationSettings = {
+  billingDueDay: number;
+  internetFee: number;
+  garbageFee: number;
+  parkingFee: number;
+};
+export type AuditLog = {
+  id: string;
+  actorUserId: string;
+  actorEmail: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  detail: string;
+  createdAt: string;
+};
+export type PortalRoom = {
+  id: string;
+  roomCode: string;
+  areaSquareMeters: number;
+  monthlyRent: number;
+};
+export type PortalContract = {
+  id: string;
+  roomId: string;
+  roomCode: string;
+  startDate: string;
+  endDate: string;
+  monthlyRent: number;
+  depositAmount: number;
+  status: 'DRAFT' | 'ACTIVE' | 'TERMINATED';
+};
+export type PortalOverview = {
+  tenantId: string;
+  fullName: string;
+  phone?: string;
+  email?: string;
+  rooms: PortalRoom[];
+  contracts: PortalContract[];
 };
 
 let csrfToken = '';
@@ -149,6 +202,12 @@ export async function registerAccount(email: string, password: string, fullName:
   });
 }
 
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  return request<void>('/api/auth/change-password', {
+    method: 'POST', body: JSON.stringify({ currentPassword, newPassword }),
+  });
+}
+
 export async function signOut(): Promise<void> {
   await request<void>('/api/auth/logout', { method: 'POST' });
   await bootstrapCsrf();
@@ -169,12 +228,16 @@ export const api = {
     request<Room>(`/api/properties/${propertyId}/rooms/${roomId}/status`, { method: 'POST', body: JSON.stringify({ status }) }),
   tenants: () => request<Tenant[]>('/api/tenants'),
   createTenant: (body: { fullName: string; phone?: string; email?: string }) => request<Tenant>('/api/tenants', { method: 'POST', body: JSON.stringify(body) }),
+  provisionTenantPortal: (tenantId: string, body: { email: string; password: string }) =>
+    request<Member>(`/api/tenants/${tenantId}/portal-account`, { method: 'POST', body: JSON.stringify(body) }),
   tariffs: () => request<Tariff[]>('/api/utility-tariffs'),
   createTariff: (body: { utilityType: UtilityType; pricePerUnit: number; effectiveFrom: string }) => request<Tariff>('/api/utility-tariffs', { method: 'POST', body: JSON.stringify(body) }),
   readings: (billingPeriod: string) => request<MeterReading[]>(`/api/meter-readings?billingPeriod=${billingPeriod}`),
   createReading: (body: { roomId: string; utilityType: UtilityType; billingPeriod: string; currentReading: number }) => request<MeterReading>('/api/meter-readings', { method: 'POST', body: JSON.stringify(body) }),
   invoices: (billingPeriod: string) => request<Invoice[]>(`/api/invoices?billingPeriod=${billingPeriod}`),
   generateInvoices: (billingPeriod: string) => request<Invoice[]>('/api/invoices/generate', { method: 'POST', body: JSON.stringify({ billingPeriod }) }),
+  adjustInvoice: (id: string, body: { serviceAmount: number; discountAmount: number; adjustmentNotes?: string }) =>
+    request<Invoice>(`/api/invoices/${id}/adjust`, { method: 'POST', body: JSON.stringify(body) }),
   issueInvoice: (id: string) => request<Invoice>(`/api/invoices/${id}/issue`, { method: 'POST' }),
   recordPayment: (id: string, body: { amount: number; method: 'CASH' | 'BANK_TRANSFER'; reference: string; idempotencyKey: string }) => request(`/api/invoices/${id}/payments`, { method: 'POST', body: JSON.stringify(body) }),
   maintenanceTickets: () => request<MaintenanceTicket[]>('/api/maintenance-tickets'),
@@ -186,4 +249,18 @@ export const api = {
     request<MaintenanceTicket>(`/api/maintenance-tickets/${id}/status`, { method: 'POST', body: JSON.stringify(body) }),
   notifications: () => request<AppNotification[]>('/api/notifications'),
   markNotificationRead: (id: string) => request<AppNotification>(`/api/notifications/${id}/read`, { method: 'POST' }),
+  members: () => request<Member[]>('/api/members'),
+  inviteMember: (body: { fullName: string; email: string; password: string; role: MembershipRole }) =>
+    request<Member>('/api/members', { method: 'POST', body: JSON.stringify(body) }),
+  updateMember: (memberId: string, body: { role: MembershipRole; active: boolean }) =>
+    request<Member>(`/api/members/${memberId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  settings: () => request<OrganizationSettings>('/api/settings'),
+  updateSettings: (body: OrganizationSettings) =>
+    request<OrganizationSettings>('/api/settings', { method: 'POST', body: JSON.stringify(body) }),
+  auditLogs: () => request<AuditLog[]>('/api/audit-logs'),
+  tenantPortalOverview: () => request<PortalOverview>('/api/tenant-portal/overview'),
+  tenantPortalInvoices: () => request<Invoice[]>('/api/tenant-portal/invoices'),
+  tenantPortalTickets: () => request<MaintenanceTicket[]>('/api/tenant-portal/tickets'),
+  createTenantPortalTicket: (body: { roomId: string; title: string; description: string; priority: TicketPriority }) =>
+    request<MaintenanceTicket>('/api/tenant-portal/tickets', { method: 'POST', body: JSON.stringify(body) }),
 };

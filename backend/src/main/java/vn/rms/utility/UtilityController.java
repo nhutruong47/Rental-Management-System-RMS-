@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.UUID;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -28,12 +29,14 @@ public class UtilityController {
     }
 
     @GetMapping("/api/utility-tariffs")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public List<UtilityService.TariffResponse> listTariffs(@AuthenticationPrincipal RmsUserPrincipal principal) {
         return utilities.listTariffDtos(principal.organizationId());
     }
 
     @PostMapping("/api/utility-tariffs")
     @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public UtilityService.TariffResponse createTariff(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                       @Valid @RequestBody CreateTariffRequest request) {
         return utilities.createTariffDto(principal.organizationId(), request.utilityType(),
@@ -42,6 +45,7 @@ public class UtilityController {
 
     @PostMapping("/api/meter-readings")
     @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public UtilityService.MeterReadingResponse createReading(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                              @Valid @RequestBody CreateReadingRequest request) {
         return utilities.createReadingDto(principal.organizationId(), request.roomId(),
@@ -49,6 +53,7 @@ public class UtilityController {
     }
 
     @GetMapping("/api/meter-readings")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public List<UtilityService.MeterReadingResponse> readings(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                               @org.springframework.web.bind.annotation.RequestParam
                                                               @DateTimeFormat(pattern = "yyyy-MM") YearMonth billingPeriod) {

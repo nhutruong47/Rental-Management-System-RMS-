@@ -47,6 +47,15 @@ public class RentalInvoice {
     @Column(name = "water_amount", nullable = false, precision = 19, scale = 0)
     private BigDecimal waterAmount;
 
+    @Column(name = "service_amount", nullable = false, precision = 19, scale = 0)
+    private BigDecimal serviceAmount = BigDecimal.ZERO;
+
+    @Column(name = "discount_amount", nullable = false, precision = 19, scale = 0)
+    private BigDecimal discountAmount = BigDecimal.ZERO;
+
+    @Column(name = "adjustment_notes", length = 300)
+    private String adjustmentNotes;
+
     @Column(name = "total_amount", nullable = false, precision = 19, scale = 0)
     private BigDecimal totalAmount;
 
@@ -67,14 +76,37 @@ public class RentalInvoice {
     protected RentalInvoice() { }
 
     public RentalInvoice(Organization organization, RentalContract contract, YearMonth period,
-                         BigDecimal rent, BigDecimal electricity, BigDecimal water) {
+                         BigDecimal rent, BigDecimal electricity, BigDecimal water,
+                         BigDecimal serviceAmount, BigDecimal discountAmount) {
         this.organization = organization;
         this.contract = contract;
         this.billingPeriod = period.toString();
         this.rentAmount = rent;
         this.electricityAmount = electricity;
         this.waterAmount = water;
-        this.totalAmount = rent.add(electricity).add(water);
+        this.serviceAmount = serviceAmount == null ? BigDecimal.ZERO : serviceAmount;
+        this.discountAmount = discountAmount == null ? BigDecimal.ZERO : discountAmount;
+        recalculateTotal();
+    }
+
+    public RentalInvoice(Organization organization, RentalContract contract, YearMonth period,
+                         BigDecimal rent, BigDecimal electricity, BigDecimal water) {
+        this(organization, contract, period, rent, electricity, water, BigDecimal.ZERO, BigDecimal.ZERO);
+    }
+
+    public void adjust(BigDecimal serviceAmount, BigDecimal discountAmount, String notes) {
+        if (status != InvoiceStatus.DRAFT) {
+            throw new IllegalStateException("Only draft invoices can be adjusted");
+        }
+        this.serviceAmount = serviceAmount == null ? BigDecimal.ZERO : serviceAmount;
+        this.discountAmount = discountAmount == null ? BigDecimal.ZERO : discountAmount;
+        this.adjustmentNotes = notes == null || notes.isBlank() ? null : notes.trim();
+        recalculateTotal();
+    }
+
+    private void recalculateTotal() {
+        BigDecimal raw = rentAmount.add(electricityAmount).add(waterAmount).add(serviceAmount).subtract(discountAmount);
+        this.totalAmount = raw.signum() < 0 ? BigDecimal.ZERO : raw;
     }
 
     public void issue() {
@@ -103,6 +135,9 @@ public class RentalInvoice {
     public BigDecimal getRentAmount() { return rentAmount; }
     public BigDecimal getElectricityAmount() { return electricityAmount; }
     public BigDecimal getWaterAmount() { return waterAmount; }
+    public BigDecimal getServiceAmount() { return serviceAmount; }
+    public BigDecimal getDiscountAmount() { return discountAmount; }
+    public String getAdjustmentNotes() { return adjustmentNotes; }
     public BigDecimal getTotalAmount() { return totalAmount; }
     public BigDecimal getAmountPaid() { return amountPaid; }
     public BigDecimal getBalanceDue() { return totalAmount.subtract(amountPaid); }

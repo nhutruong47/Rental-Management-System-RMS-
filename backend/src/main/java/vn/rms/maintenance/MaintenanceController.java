@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,12 +30,14 @@ public class MaintenanceController {
     }
 
     @GetMapping
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public List<MaintenanceService.TicketResponse> list(@AuthenticationPrincipal RmsUserPrincipal principal) {
         return maintenance.list(principal.organizationId());
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public MaintenanceService.TicketResponse create(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                     @Valid @RequestBody CreateTicketRequest request) {
         return maintenance.create(principal.organizationId(), principal.userId(), request.roomId(),
@@ -42,6 +45,7 @@ public class MaintenanceController {
     }
 
     @PostMapping("/{ticketId}/assign")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public MaintenanceService.TicketResponse assign(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                     @PathVariable UUID ticketId,
                                                     @Valid @RequestBody AssignTicketRequest request) {
@@ -49,6 +53,7 @@ public class MaintenanceController {
     }
 
     @PostMapping("/{ticketId}/status")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER', 'STAFF')")
     public MaintenanceService.TicketResponse transition(@AuthenticationPrincipal RmsUserPrincipal principal,
                                                         @PathVariable UUID ticketId,
                                                         @Valid @RequestBody UpdateTicketStatusRequest request) {
