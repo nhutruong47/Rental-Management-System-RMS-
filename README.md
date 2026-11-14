@@ -1,16 +1,16 @@
 # Rental Management System (RMS)
 
-MVP web platform for managing small rental properties in Vietnam (properties, rooms, tenants, exclusive contracts, configurable utility tariffs & meter readings, VND invoices, manual payment recording, and owner dashboard).
+Vietnamese web platform for managing small rental properties, rooms, tenants, exclusive contracts, configurable utility tariffs & meter readings, VND invoices, manual payments, maintenance tickets, contract handovers, and in-app notifications.
 
 ## Current status
 
-Core P0 MVP workflows are implemented and verified end-to-end against PostgreSQL + Flyway + Docker Compose. See [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md), [docs/TEST_RESULTS.md](docs/TEST_RESULTS.md), and [docs/ISSUES.md](docs/ISSUES.md) for verified details, limitations, and deferred P1 scope.
+Implemented and verified end-to-end (`VERIFIED RUNNABLE`) for all P0 core workflows (`WF-001`–`WF-004`) plus P1 maintenance (`WF-005`), contract termination & deposit settlement handover (`WF-006`), and in-app notifications. See [docs/FINAL_DELIVERY_REPORT.md](docs/FINAL_DELIVERY_REPORT.md), [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md), [docs/TEST_RESULTS.md](docs/TEST_RESULTS.md), and [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
 ## Stack
 
-- **Backend:** Java 21, Spring Boot 3.5.16, Spring Security (session cookie `RMSSESSION` + CSRF `X-XSRF-TOKEN`), Spring Data JPA (`open-in-view: false`), Flyway, PostgreSQL 16, Spring Boot Actuator (`/actuator/health`).
-- **Frontend:** React, TypeScript, Vite, Nginx reverse proxy (`/api/` and `/actuator/`).
-- **Local integration:** Docker Compose (development only; no public deployment, e-signature, tax e-invoice, or payment gateway integration).
+- **Backend:** Java 21, Spring Boot 3.5.16, Spring Security (`RMSSESSION` HttpOnly cookie + `X-XSRF-TOKEN` CSRF), Spring Data JPA (`open-in-view: false`), Flyway (`V1`–`V4`), PostgreSQL 16, Spring Boot Actuator (`/actuator/health`).
+- **Frontend:** React 19, TypeScript, Vite, Nginx reverse proxy (`/api/` and `/actuator/`).
+- **Local integration:** Docker Compose (local/dev only; no public deployment, payment gateway, e-signature, or tax e-invoice integration).
 
 ## Local development
 
@@ -28,6 +28,7 @@ POSTGRES_PORT=55432 FRONTEND_PORT=55173 docker compose up --build -d
 
 - Frontend SPA: `http://localhost:5173/` (or `http://localhost:${FRONTEND_PORT}/`)
 - Backend health: `http://localhost:8080/actuator/health`
+- **Development accounts:** No hardcoded credentials are seeded. Click **"Tạo tài khoản"** on the login screen (password ≥ 12 characters) to register an isolated development organization and owner account.
 
 ## Running tests
 
@@ -44,3 +45,11 @@ npm --prefix frontend run check
 npm --prefix frontend run test -- --reporter=verbose
 npm --prefix frontend run build
 ```
+
+## Documentation index
+
+- [Final Delivery Report](docs/FINAL_DELIVERY_REPORT.md)
+- [BRD](docs/BRD.md) · [SRS](docs/SRS.md) · [Business Rules](docs/BUSINESS_RULES.md) · [Use Cases](docs/USE_CASES.md) · [Workflows](docs/WORKFLOWS.md)
+- [Architecture](docs/ARCHITECTURE.md) · [ERD](docs/ERD.md) · [API](docs/API.md) · [Security](docs/SECURITY.md)
+- [Project Status](docs/PROJECT_STATUS.md) · [Requirements Traceability](docs/REQUIREMENTS_TRACEABILITY.md) · [Test Plan](docs/TEST_PLAN.md) · [Test Results](docs/TEST_RESULTS.md)
+- [Deployment](docs/DEPLOYMENT.md) · [Assumptions](docs/ASSUMPTIONS.md) · [Decisions](docs/DECISIONS.md) · [Issues](docs/ISSUES.md) · [Known Limitations](docs/KNOWN_LIMITATIONS.md)

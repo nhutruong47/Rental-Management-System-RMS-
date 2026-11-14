@@ -2,19 +2,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { api, bootstrapCsrf, currentSession, signIn } from './api';
-import type { Contract, Invoice, MeterReading, Property, Room, Tariff, Tenant } from './api';
+import type { Contract, Invoice, MaintenanceTicket, MeterReading, Property, Room, Tariff, Tenant } from './api';
 
 vi.mock('./api', () => ({
   api: {
     properties: vi.fn(), contracts: vi.fn(), createContract: vi.fn(), activateContract: vi.fn(),
+    terminateContract: vi.fn(), handover: vi.fn(), updateRoomStatus: vi.fn(),
     rooms: vi.fn(), tenants: vi.fn(), invoices: vi.fn(), tariffs: vi.fn(), readings: vi.fn(),
+    maintenanceTickets: vi.fn(), createTicket: vi.fn(), assignTicket: vi.fn(), updateTicketStatus: vi.fn(),
+    notifications: vi.fn(), markNotificationRead: vi.fn(),
   },
   bootstrapCsrf: vi.fn(), currentSession: vi.fn(), registerAccount: vi.fn(), signIn: vi.fn(), signOut: vi.fn(),
 }));
 
 const contract: Contract = {
   id: 'contract-1', roomId: 'room-1', tenantId: 'tenant-1', startDate: '2026-11-01',
-  endDate: '2027-10-31', monthlyRent: 3500000, status: 'DRAFT',
+  endDate: '2027-10-31', monthlyRent: 3500000, depositAmount: 3500000, status: 'DRAFT',
 };
 const properties: Property[] = [{ id: 'property-1', name: 'Nhà An Bình', address: 'Quận 3, TP. Hồ Chí Minh' }];
 const rooms: Room[] = [{ id: 'room-1', propertyId: 'property-1', roomCode: 'P101', areaSquareMeters: 20, capacity: 2, monthlyRent: 3500000, depositAmount: 3500000, status: 'AVAILABLE' }];
@@ -24,8 +27,13 @@ const readings: MeterReading[] = [{
   id: 'reading-1', roomId: 'room-1', utilityType: 'ELECTRICITY', billingPeriod: '2026-11',
   previousReading: 100, currentReading: 150, usage: 50, unitPrice: 3500, charge: 175000,
 }];
+const ticket: MaintenanceTicket = {
+  id: 'ticket-1', roomId: 'room-1', title: 'Rò rỉ vòi nước', description: 'Vòi lavabo nhỏ giọt',
+  priority: 'HIGH', status: 'OPEN', estimatedCost: 150000, actualCost: 0,
+  createdAt: '2026-11-14T00:00:00Z', updatedAt: '2026-11-14T00:00:00Z',
+};
 
-async function openWorkspace() {
+async function openWorkspace(initialContracts: Contract[] = [contract]) {
   vi.mocked(bootstrapCsrf).mockResolvedValue(undefined);
   vi.mocked(currentSession).mockResolvedValue(null);
   vi.mocked(signIn).mockResolvedValue({
@@ -38,7 +46,9 @@ async function openWorkspace() {
   vi.mocked(api.invoices).mockResolvedValue([] as Invoice[]);
   vi.mocked(api.tariffs).mockResolvedValue(tariffs);
   vi.mocked(api.readings).mockResolvedValue(readings);
-  vi.mocked(api.contracts).mockResolvedValue([contract]);
+  vi.mocked(api.contracts).mockResolvedValue(initialContracts);
+  vi.mocked(api.maintenanceTickets).mockResolvedValue([ticket]);
+  vi.mocked(api.notifications).mockResolvedValue([]);
   render(<App />);
   await waitFor(() => expect(bootstrapCsrf).toHaveBeenCalled());
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'owner@example.test' } });
@@ -77,5 +87,20 @@ describe('RMS owner workspace', () => {
     expect(screen.getByText('P101')).toBeInTheDocument();
     expect(screen.getByText('150')).toBeInTheDocument();
     expect(screen.getByText('50')).toBeInTheDocument();
+  });
+
+  it('displays maintenance tickets and lets the owner assign a technician', async () => {
+    await openWorkspace();
+    fireEvent.click(screen.getByRole('button', { name: /Bảo trì/ }));
+    expect(await screen.findByText('Rò rỉ vòi nước')).toBeInTheDocument();
+
+    vi.mocked(api.assignTicket).mockResolvedValue({ ...ticket, status: 'ASSIGNED', assigneeName: 'Anh Tùng' });
+    vi.mocked(api.maintenanceTickets).mockResolvedValue([{ ...ticket, status: 'ASSIGNED', assigneeName: 'Anh Tùng' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Phân công' }));
+    fireEvent.change(screen.getByLabelText('Nhân viên / đơn vị phụ trách'), { target: { value: 'Anh Tùng' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Xác nhận phân công' }));
+
+    await waitFor(() => expect(api.assignTicket).toHaveBeenCalledWith('ticket-1', 'Anh Tùng'));
+    expect(await screen.findByText('Anh Tùng')).toBeInTheDocument();
   });
 });

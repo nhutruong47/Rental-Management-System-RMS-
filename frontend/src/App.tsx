@@ -1,22 +1,27 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowUpRight, Building2, Check, CircleHelp, CreditCard, DoorOpen, Droplets,
-  FileText, Home, LogOut, Menu, Plus, Search, ShieldCheck, Users, Wallet, X, Zap,
+  ArrowUpRight, Bell, Building2, Check, CircleHelp, CreditCard, DoorOpen, Droplets,
+  FileText, Home, LogOut, Menu, Plus, Search, ShieldCheck, Users, Wallet, Wrench, X, Zap,
 } from 'lucide-react';
 import {
   api, bootstrapCsrf, currentSession, registerAccount, signIn, signOut,
-  type Contract, type Invoice, type MeterReading, type Property, type Room,
-  type SessionAccount, type Tariff, type Tenant, type UtilityType,
+  type AppNotification, type Contract, type HandoverRecord, type Invoice, type MaintenanceTicket,
+  type MeterReading, type Property, type Room, type RoomStatusValue, type SessionAccount,
+  type Tariff, type Tenant, type TicketPriority, type TicketStatus, type UtilityType,
 } from './api';
 
-type PageKey = 'dashboard' | 'properties' | 'tenants' | 'contracts' | 'utilities' | 'invoices';
-type ModalKind = 'property' | 'room' | 'tenant' | 'contract' | 'tariff' | 'reading' | 'payment';
+type PageKey = 'dashboard' | 'properties' | 'tenants' | 'contracts' | 'utilities' | 'invoices' | 'maintenance';
+type ModalKind = 'property' | 'room' | 'tenant' | 'contract' | 'terminate' | 'handover' | 'tariff' | 'reading' | 'payment' | 'ticket' | 'assign' | 'resolve';
 const money = (value: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(value || 0);
 const currentPeriod = new Date().toISOString().slice(0, 7);
-const label: Record<PageKey, string> = { dashboard: 'Tổng quan', properties: 'Nhà & phòng', tenants: 'Người thuê', contracts: 'Hợp đồng', utilities: 'Điện & nước', invoices: 'Hóa đơn' };
+const label: Record<PageKey, string> = {
+  dashboard: 'Tổng quan', properties: 'Nhà & phòng', tenants: 'Người thuê',
+  contracts: 'Hợp đồng', utilities: 'Điện & nước', invoices: 'Hóa đơn', maintenance: 'Bảo trì',
+};
 const navItems: { key: PageKey; icon: typeof Home }[] = [
   { key: 'dashboard', icon: Home }, { key: 'properties', icon: Building2 }, { key: 'tenants', icon: Users },
   { key: 'contracts', icon: FileText }, { key: 'utilities', icon: Zap }, { key: 'invoices', icon: CreditCard },
+  { key: 'maintenance', icon: Wrench },
 ];
 
 function App() {
@@ -32,18 +37,27 @@ function App() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [tariffs, setTariffs] = useState<Tariff[]>([]);
   const [readings, setReadings] = useState<MeterReading[]>([]);
+  const [tickets, setTickets] = useState<MaintenanceTicket[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notifOpen, setNotifOpen] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [modal, setModal] = useState<ModalKind | null>(null);
   const [selectedProperty, setSelectedProperty] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
+  const [selectedHandover, setSelectedHandover] = useState<HandoverRecord | null>(null);
+  const [selectedTicket, setSelectedTicket] = useState<MaintenanceTicket | null>(null);
   const [search, setSearch] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const sessionEpoch = useRef(0);
 
   const loadWorkspace = useCallback(async () => {
-    const [nextProperties, nextTenants, nextInvoices, nextTariffs, nextContracts, nextReadings] = await Promise.all([
+    const [nextProperties, nextTenants, nextInvoices, nextTariffs, nextContracts, nextReadings, nextTickets, nextNotifications] = await Promise.all([
       api.properties(), api.tenants(), api.invoices(period), api.tariffs(), api.contracts(), api.readings(period),
+      api.maintenanceTickets().catch(() => [] as MaintenanceTicket[]),
+      api.notifications().catch(() => [] as AppNotification[]),
     ]);
     const roomLists = await Promise.all(nextProperties.map((property) => api.rooms(property.id)));
     setProperties(nextProperties);
@@ -53,6 +67,8 @@ function App() {
     setTariffs(nextTariffs);
     setContracts(nextContracts);
     setReadings(nextReadings);
+    setTickets(nextTickets);
+    setNotifications(nextNotifications);
     const activeIndex = selectedProperty ? nextProperties.findIndex((item) => item.id === selectedProperty) : -1;
     const resolvedIndex = activeIndex >= 0 ? activeIndex : 0;
     const propertyId = nextProperties[resolvedIndex]?.id ?? '';
@@ -89,10 +105,19 @@ function App() {
   const billed = invoices.reduce((total, invoice) => total + invoice.totalAmount, 0);
 
   async function perform<T>(action: () => Promise<T>, done?: (result: T) => void, successText?: string) {
+    const epoch = sessionEpoch.current;
     setBusy(true); setError(''); setNotice('');
-    try { const result = await action(); done?.(result); await loadWorkspace(); if (successText) setNotice(successText); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Đã có lỗi xảy ra. Vui lòng thử lại.'); }
-    finally { setBusy(false); }
+    try {
+      const result = await action();
+      if (epoch !== sessionEpoch.current) return;
+      done?.(result);
+      await loadWorkspace();
+      if (epoch === sessionEpoch.current && successText) setNotice(successText);
+    } catch (reason) {
+      if (epoch === sessionEpoch.current) setError(reason instanceof Error ? reason.message : 'Đã có lỗi xảy ra. Vui lòng thử lại.');
+    } finally {
+      if (epoch === sessionEpoch.current) setBusy(false);
+    }
   }
 
   async function handleLogin(email: string, password: string, registration?: { fullName: string; organizationName: string }) {
@@ -111,14 +136,31 @@ function App() {
   }
 
   async function logout() {
+    sessionEpoch.current += 1;
+    setUser(null); setPage('dashboard'); setProperties([]); setAllRooms([]); setRooms([]); setTenants([]); setInvoices([]); setTariffs([]); setReadings([]); setContracts([]); setTickets([]); setNotifications([]); setNotifOpen(false); setNotice(''); setError(''); setBusy(false);
     try { await signOut(); } catch { /* local UI still clears if a session already expired */ }
-    setUser(null); setProperties([]); setAllRooms([]); setRooms([]); setTenants([]); setInvoices([]); setTariffs([]); setReadings([]); setContracts([]); setNotice(''); setError('');
+  }
+
+  async function openHandover(contract: Contract) {
+    setBusy(true); setError('');
+    try {
+      const record = await api.handover(contract.id);
+      setSelectedContract(contract);
+      setSelectedHandover(record);
+      setModal('handover');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Không tải được biên bản bàn giao.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!user) return <AuthScreen onSubmit={handleLogin} busy={busy || !csrfReady} error={error} />;
 
   const orgName = user.organizationName || 'Tổ chức của bạn';
   const todayLabel = new Intl.DateTimeFormat('vi-VN', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' }).format(new Date()).toUpperCase();
+  const openTicketsCount = tickets.filter((t) => t.status !== 'CLOSED' && t.status !== 'RESOLVED').length;
+  const unreadNotifs = notifications.filter((n) => !n.read).length;
 
   return <div className="app-shell">
     <aside className={`sidebar ${menuOpen ? 'sidebar-open' : ''}`}>
@@ -126,42 +168,75 @@ function App() {
       <div className="side-caption">KHÔNG GIAN LÀM VIỆC</div>
       <div className="workspace-switch" aria-label="Tổ chức hiện tại"><span className="workspace-avatar">{orgName.slice(0, 1).toUpperCase()}</span><span className="workspace-copy"><strong>{orgName}</strong><small>Vai trò: {user.role === 'OWNER' ? 'Chủ sở hữu' : user.role}</small></span></div>
       <div className="side-caption nav-caption">MENU CHÍNH</div>
-      <nav className="main-nav">{navItems.map(({ key, icon: Icon }) => <button key={key} className={`nav-link ${page === key ? 'active' : ''}`} onClick={() => { setPage(key); setMenuOpen(false); }}><Icon size={18} strokeWidth={1.8} /><span>{label[key]}</span>{key === 'invoices' && totalDue > 0 && <span className="nav-pill">{invoices.filter((invoice) => invoice.balanceDue > 0).length}</span>}</button>)}</nav>
+      <nav className="main-nav">{navItems.map(({ key, icon: Icon }) => <button key={key} className={`nav-link ${page === key ? 'active' : ''}`} onClick={() => { setPage(key); setMenuOpen(false); }}><Icon size={18} strokeWidth={1.8} /><span>{label[key]}</span>{key === 'invoices' && totalDue > 0 && <span className="nav-pill">{invoices.filter((invoice) => invoice.balanceDue > 0).length}</span>}{key === 'maintenance' && openTicketsCount > 0 && <span className="nav-pill">{openTicketsCount}</span>}</button>)}</nav>
       <div className="sidebar-bottom"><div className="upgrade-card"><span className="upgrade-icon"><ShieldCheck size={16} /></span><strong>Dữ liệu tách biệt theo tổ chức</strong><p>Phòng, hợp đồng, chỉ số và thu chi được gắn với {orgName}.</p></div><div className="profile-row"><div className="avatar">{user.email.slice(0, 1).toUpperCase()}</div><div className="profile-copy"><strong>{user.email.split('@')[0]}</strong><small>{user.email}</small></div><button className="icon-button profile-logout" title="Đăng xuất" aria-label="Đăng xuất" onClick={logout}><LogOut size={16} /></button></div></div>
     </aside>
 
     <main className="main-area" id="top">
-      <header className="topbar"><button className="mobile-menu icon-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Mở menu"><Menu size={19} /></button><div className="breadcrumbs"><span>{orgName}</span><span className="crumb-separator">/</span><strong>{label[page]}</strong></div><div className="top-actions"><span className="secure-label"><ShieldCheck size={15} /> Dữ liệu riêng tư</span><div className="top-divider" /><div className="avatar top-avatar">{user.email.slice(0, 1).toUpperCase()}</div></div></header>
+      <header className="topbar"><button className="mobile-menu icon-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Mở menu"><Menu size={19} /></button><div className="breadcrumbs"><span>{orgName}</span><span className="crumb-separator">/</span><strong>{label[page]}</strong></div><div className="top-actions"><span className="secure-label"><ShieldCheck size={15} /> Dữ liệu riêng tư</span><button className="icon-button notification-button" title="Thông báo" aria-label="Thông báo" onClick={() => setNotifOpen(!notifOpen)}><Bell size={18} />{unreadNotifs > 0 && <i />}</button><div className="top-divider" /><div className="avatar top-avatar">{user.email.slice(0, 1).toUpperCase()}</div></div></header>
       <section className="page-content">
-        <div className="page-heading"><div><div className="eyebrow">{todayLabel}</div><h1>{page === 'dashboard' ? 'Chào buổi sáng 👋' : label[page]}</h1><p>{page === 'dashboard' ? 'Đây là tình hình vận hành danh mục nhà của bạn.' : pageSubtitle(page)}</p></div><div className="heading-actions"><label className="period-picker"><span>Kỳ báo cáo</span><input type="month" value={period} onChange={(event) => setPeriod(event.target.value)} /></label>{page === 'properties' && <button className="button button-primary" onClick={() => setModal('property')}><Plus size={17} /> Thêm nhà</button>}{page === 'tenants' && <button className="button button-primary" onClick={() => setModal('tenant')}><Plus size={17} /> Thêm người thuê</button>}{page === 'contracts' && <button className="button button-primary" onClick={() => setModal('contract')} disabled={!allRooms.length || !tenants.length}><Plus size={17} /> Tạo hợp đồng</button>}{page === 'utilities' && <button className="button button-primary" onClick={() => setModal('reading')} disabled={!allRooms.length}><Plus size={17} /> Ghi chỉ số</button>}{page === 'invoices' && <button className="button button-primary" disabled={busy} onClick={() => perform(() => api.generateInvoices(period), undefined, `Đã cập nhật danh sách hóa đơn kỳ ${period}.`)}><Zap size={16} /> Tạo hóa đơn</button>}</div></div>
+        {notifOpen && <section className="panel data-panel" style={{ marginBottom: 18 }}>
+          <div className="panel-head"><div><span className="panel-kicker">THÔNG BÁO NỘI BỘ</span><h3>Hoạt động gần đây ({unreadNotifs} chưa đọc)</h3></div><button className="icon-button" onClick={() => setNotifOpen(false)} aria-label="Đóng thông báo"><X size={16} /></button></div>
+          {notifications.length ? <div style={{ display: 'grid', gap: 8 }}>{notifications.slice(0, 8).map((item) => <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 8, background: item.read ? '#fafbfc' : '#f1f4fb', border: '1px solid #e9ebef' }}><div><strong>{item.title}</strong><div style={{ fontSize: 11, color: '#68707e' }}>{item.message}</div></div>{!item.read && <button className="button button-small button-secondary" disabled={busy} onClick={() => perform(() => api.markNotificationRead(item.id))}>Đã đọc</button>}</div>)}</div> : <div className="table-empty">Chưa có thông báo mới.</div>}
+        </section>}
+        <div className="page-heading"><div><div className="eyebrow">{todayLabel}</div><h1>{page === 'dashboard' ? 'Chào buổi sáng 👋' : label[page]}</h1><p>{page === 'dashboard' ? 'Đây là tình hình vận hành danh mục nhà của bạn.' : pageSubtitle(page)}</p></div><div className="heading-actions"><label className="period-picker"><span>Kỳ báo cáo</span><input type="month" value={period} onChange={(event) => setPeriod(event.target.value)} /></label>{page === 'properties' && <button className="button button-primary" onClick={() => setModal('property')}><Plus size={17} /> Thêm nhà</button>}{page === 'tenants' && <button className="button button-primary" onClick={() => setModal('tenant')}><Plus size={17} /> Thêm người thuê</button>}{page === 'contracts' && <button className="button button-primary" onClick={() => setModal('contract')} disabled={!allRooms.length || !tenants.length}><Plus size={17} /> Tạo hợp đồng</button>}{page === 'utilities' && <button className="button button-primary" onClick={() => setModal('reading')} disabled={!allRooms.length}><Plus size={17} /> Ghi chỉ số</button>}{page === 'invoices' && <button className="button button-primary" disabled={busy} onClick={() => perform(() => api.generateInvoices(period), undefined, `Đã cập nhật danh sách hóa đơn kỳ ${period}.`)}><Zap size={16} /> Tạo hóa đơn</button>}{page === 'maintenance' && <button className="button button-primary" onClick={() => setModal('ticket')} disabled={!allRooms.length}><Plus size={17} /> Tạo yêu cầu bảo trì</button>}</div></div>
         {error && <div className="alert error-alert" role="alert"><CircleHelp size={17} /><span>{error}</span><button onClick={() => setError('')} aria-label="Đóng"><X size={16} /></button></div>}
         {notice && <div className="alert" style={{ background: '#edf8f3', color: '#1b6e52', border: '1px solid #ccead9' }}><span>{notice}</span><button onClick={() => setNotice('')} aria-label="Đóng thông báo"><X size={16} /></button></div>}
         {page === 'dashboard' && <Dashboard properties={properties} rooms={allRooms} tenants={tenants} invoices={invoices} occupancy={occupancy} billed={billed} collected={collected} totalDue={totalDue} period={period} onNavigate={setPage} onGenerate={() => perform(() => api.generateInvoices(period), undefined, `Đã tạo hóa đơn kỳ ${period}.`)} />}
-        {page === 'properties' && <PropertiesPage properties={properties} rooms={filteredRooms} selected={selectedProperty} search={search} onSearch={setSearch} onSelect={refreshRooms} onAddRoom={() => setModal('room')} onAddProperty={() => setModal('property')} />}
+        {page === 'properties' && <PropertiesPage properties={properties} rooms={filteredRooms} selected={selectedProperty} search={search} busy={busy} onSearch={setSearch} onSelect={refreshRooms} onAddRoom={() => setModal('room')} onAddProperty={() => setModal('property')} onChangeRoomStatus={(room, status) => perform(() => api.updateRoomStatus(selectedProperty, room.id, status), undefined, `Đã cập nhật phòng ${room.roomCode}.`)} />}
         {page === 'tenants' && <TenantsPage tenants={tenants} onAdd={() => setModal('tenant')} />}
-        {page === 'contracts' && <ContractsPage contracts={contracts} rooms={allRooms} tenants={tenants} busy={busy} onAdd={() => setModal('contract')} onActivate={(contract) => perform(() => api.activateContract(contract.id), undefined, 'Đã kích hoạt hợp đồng và cập nhật phòng sang Đang thuê.')} />}
+        {page === 'contracts' && <ContractsPage contracts={contracts} rooms={allRooms} tenants={tenants} busy={busy} onAdd={() => setModal('contract')} onActivate={(contract) => perform(() => api.activateContract(contract.id), undefined, 'Đã kích hoạt hợp đồng và cập nhật phòng sang Đang thuê.')} onTerminate={(contract) => { setSelectedContract(contract); setModal('terminate'); }} onViewHandover={openHandover} />}
         {page === 'utilities' && <UtilitiesPage properties={properties} rooms={allRooms} tariffs={tariffs} readings={readings} period={period} onAddTariff={() => setModal('tariff')} onAddReading={() => setModal('reading')} />}
         {page === 'invoices' && <InvoicesPage invoices={invoices} tenants={tenants} rooms={allRooms} busy={busy} onGenerate={() => perform(() => api.generateInvoices(period), undefined, `Đã tạo hóa đơn kỳ ${period}.`)} onIssue={(invoice) => perform(() => api.issueInvoice(invoice.id), undefined, 'Đã phát hành hóa đơn.')} onPay={(invoice) => { setSelectedInvoice(invoice); setModal('payment'); }} />}
-        <footer className="page-footer"><span>© 2026 RMS. Quản lý rõ ràng, vận hành nhẹ nhàng.</span><span>Phiên bản MVP 0.1</span></footer>
+        {page === 'maintenance' && <MaintenancePage tickets={tickets} rooms={allRooms} busy={busy} onAdd={() => setModal('ticket')} onAssign={(ticket) => { setSelectedTicket(ticket); setModal('assign'); }} onTransition={(ticket, status) => { if (status === 'RESOLVED') { setSelectedTicket(ticket); setModal('resolve'); } else { perform(() => api.updateTicketStatus(ticket.id, { status }), undefined, 'Đã cập nhật trạng thái bảo trì.'); } }} />}
+        <footer className="page-footer"><span>© 2026 RMS. Quản lý rõ ràng, vận hành nhẹ nhàng.</span><span>Phiên bản MVP 0.2 (P0 + P1)</span></footer>
       </section>
     </main>
-    {modal && <Modal title={modalTitle(modal)} onClose={() => { setModal(null); setSelectedInvoice(null); }}>
+    {modal && <Modal title={modalTitle(modal)} onClose={() => { setModal(null); setSelectedInvoice(null); setSelectedContract(null); setSelectedHandover(null); setSelectedTicket(null); }}>
       {modal === 'property' && <PropertyForm busy={busy} onCancel={() => setModal(null)} onSubmit={(body) => perform(() => api.createProperty(body), () => setModal(null), 'Đã thêm bất động sản mới.')} />}
       {modal === 'room' && <RoomForm busy={busy} onCancel={() => setModal(null)} onSubmit={(body) => perform(() => api.createRoom(selectedProperty, body), () => setModal(null), 'Đã thêm phòng mới.')} />}
       {modal === 'tenant' && <TenantForm busy={busy} onCancel={() => setModal(null)} onSubmit={(body) => perform(() => api.createTenant(body), () => setModal(null), 'Đã lưu hồ sơ người thuê.')} />}
       {modal === 'contract' && <ContractForm rooms={allRooms} tenants={tenants} busy={busy} onCancel={() => setModal(null)} onSubmit={(body) => perform(() => api.createContract(body), () => setModal(null), 'Đã tạo hợp đồng bản nháp.')} />}
+      {modal === 'terminate' && selectedContract && <TerminateContractForm contract={selectedContract} busy={busy} onCancel={() => { setModal(null); setSelectedContract(null); }} onSubmit={(body) => perform(() => api.terminateContract(selectedContract.id, body), (handover) => { setSelectedHandover(handover); setModal('handover'); }, 'Đã thanh lý hợp đồng, quyết toán tiền cọc và trả phòng về Trống.')} />}
+      {modal === 'handover' && selectedHandover && <HandoverSummary handover={selectedHandover} onClose={() => { setModal(null); setSelectedContract(null); setSelectedHandover(null); }} />}
       {modal === 'tariff' && <TariffForm busy={busy} onCancel={() => setModal(null)} onSubmit={(body) => perform(() => api.createTariff(body), () => setModal(null), 'Đã lưu đơn giá dịch vụ.')} />}
       {modal === 'reading' && <ReadingForm rooms={allRooms} period={period} tariffs={tariffs} busy={busy} onCancel={() => setModal(null)} onSubmit={(body) => perform(() => api.createReading(body), () => setModal(null), 'Đã ghi nhận chỉ số công tơ.')} onAddTariff={() => setModal('tariff')} />}
       {modal === 'payment' && selectedInvoice && <PaymentForm invoice={selectedInvoice} busy={busy} onCancel={() => { setModal(null); setSelectedInvoice(null); }} onSubmit={(body) => perform(() => api.recordPayment(selectedInvoice.id, body), () => { setModal(null); setSelectedInvoice(null); }, 'Đã ghi nhận thanh toán thủ công.')} />}
+      {modal === 'ticket' && <TicketForm rooms={allRooms} busy={busy} onCancel={() => setModal(null)} onSubmit={(body) => perform(() => api.createTicket(body), () => setModal(null), 'Đã tạo yêu cầu bảo trì.')} />}
+      {modal === 'assign' && selectedTicket && <AssignTicketForm ticket={selectedTicket} busy={busy} onCancel={() => { setModal(null); setSelectedTicket(null); }} onSubmit={(assigneeName) => perform(() => api.assignTicket(selectedTicket.id, assigneeName), () => { setModal(null); setSelectedTicket(null); }, 'Đã phân công xử lý bảo trì.')} />}
+      {modal === 'resolve' && selectedTicket && <ResolveTicketForm ticket={selectedTicket} busy={busy} onCancel={() => { setModal(null); setSelectedTicket(null); }} onSubmit={(body) => perform(() => api.updateTicketStatus(selectedTicket.id, { status: 'RESOLVED', ...body }), () => { setModal(null); setSelectedTicket(null); }, 'Đã hoàn tất sửa chữa.')} />}
     </Modal>}
     {menuOpen && <button className="mobile-backdrop" onClick={() => setMenuOpen(false)} aria-label="Đóng menu" />}
   </div>;
 }
 
 function pageSubtitle(page: PageKey) {
-  return ({ dashboard: 'Tình hình vận hành danh mục nhà của bạn.', properties: 'Theo dõi danh mục bất động sản và tình trạng từng phòng.', tenants: 'Thông tin liên hệ và hồ sơ người đang thuê.', contracts: 'Quản lý thời hạn thuê và trạng thái hợp đồng.', utilities: 'Cấu hình đơn giá, cập nhật chỉ số điện nước theo kỳ.', invoices: 'Tổng hợp tiền phòng, dịch vụ và khoản đã thu.' })[page];
+  return ({
+    dashboard: 'Tình hình vận hành danh mục nhà của bạn.',
+    properties: 'Theo dõi danh mục bất động sản và tình trạng từng phòng.',
+    tenants: 'Thông tin liên hệ và hồ sơ người đang thuê.',
+    contracts: 'Quản lý thời hạn thuê, kích hoạt và thanh lý bàn giao.',
+    utilities: 'Cấu hình đơn giá, cập nhật chỉ số điện nước theo kỳ.',
+    invoices: 'Tổng hợp tiền phòng, dịch vụ và khoản đã thu.',
+    maintenance: 'Tiếp nhận sự cố, phân công và theo dõi chi phí bảo trì.',
+  })[page];
 }
-function modalTitle(kind: ModalKind) { return ({ property: 'Thêm nhà mới', room: 'Thêm phòng', tenant: 'Thêm người thuê', contract: 'Tạo hợp đồng', tariff: 'Cấu hình đơn giá', reading: 'Ghi chỉ số công tơ', payment: 'Ghi nhận thanh toán' })[kind]; }
+function modalTitle(kind: ModalKind) {
+  return ({
+    property: 'Thêm nhà mới',
+    room: 'Thêm phòng',
+    tenant: 'Thêm người thuê',
+    contract: 'Tạo hợp đồng',
+    terminate: 'Thanh lý hợp đồng & bàn giao',
+    handover: 'Biên bản bàn giao & quyết toán cọc',
+    tariff: 'Cấu hình đơn giá',
+    reading: 'Ghi chỉ số công tơ',
+    payment: 'Ghi nhận thanh toán',
+    ticket: 'Tạo yêu cầu bảo trì',
+    assign: 'Phân công nhân viên sửa chữa',
+    resolve: 'Hoàn tất xử lý bảo trì',
+  })[kind];
+}
 
 function Dashboard({ properties, rooms, tenants, invoices, occupancy, billed, collected, totalDue, period, onNavigate, onGenerate }: { properties: Property[]; rooms: Room[]; tenants: Tenant[]; invoices: Invoice[]; occupancy: number; billed: number; collected: number; totalDue: number; period: string; onNavigate: (page: PageKey) => void; onGenerate: () => void }) {
   const noData = properties.length === 0;
@@ -183,17 +258,29 @@ function StatusBadge({ status }: { status: Invoice['status'] }) { const labels: 
 function QuickAction({ icon: Icon, title, caption, onClick, tone }: { icon: typeof Home; title: string; caption: string; onClick: () => void; tone: string }) { return <button className="quick-action" onClick={onClick}><span className={`quick-icon tone-${tone}`}><Icon size={17} /></span><span><strong>{title}</strong><small>{caption}</small></span><ArrowUpRight size={15} /></button>; }
 function EmptyInline({ icon: Icon, title, text, action, onClick }: { icon: typeof Home; title: string; text: string; action: string; onClick: () => void }) { return <div className="empty-inline"><span className="empty-icon"><Icon size={20} /></span><strong>{title}</strong><p>{text}</p><button className="text-button" onClick={onClick}>{action} <ArrowUpRight size={14} /></button></div>; }
 
-function PropertiesPage({ properties, rooms, selected, search, onSearch, onSelect, onAddRoom, onAddProperty }: { properties: Property[]; rooms: Room[]; selected: string; search: string; onSearch: (value: string) => void; onSelect: (id: string) => void; onAddRoom: () => void; onAddProperty: () => void }) {
-  return <section className="panel data-panel"><div className="data-toolbar"><div className="property-select-wrap"><span className="toolbar-label">BẤT ĐỘNG SẢN</span><select className="property-select" value={selected} onChange={(event) => onSelect(event.target.value)}><option value="">Chọn bất động sản</option>{properties.map((property) => <option key={property.id} value={property.id}>{property.name}</option>)}</select></div><div className="table-actions"><label className="search-box"><Search size={16} /><input placeholder="Tìm phòng..." value={search} onChange={(event) => onSearch(event.target.value)} /></label><button className="button button-secondary" onClick={onAddRoom} disabled={!selected}><Plus size={15} /> Thêm phòng</button></div></div>{!properties.length ? <EmptyInline icon={Building2} title="Chưa có bất động sản nào" text="Thêm nhà trọ hoặc căn hộ để bắt đầu quản lý phòng." action="Thêm nhà" onClick={onAddProperty} /> : <><div className="selected-property-line"><span className="property-pin"><Building2 size={17} /></span><span><strong>{properties.find((property) => property.id === selected)?.name}</strong><small>{properties.find((property) => property.id === selected)?.address}</small></span><span className="room-count"><strong>{rooms.length}</strong> phòng</span></div><div className="table-wrap"><table><thead><tr><th>MÃ PHÒNG</th><th>DIỆN TÍCH</th><th>SỨC CHỨA</th><th>GIÁ THUÊ / THÁNG</th><th>TIỀN CỌC</th><th>TÌNH TRẠNG</th></tr></thead><tbody>{rooms.map((room) => <tr key={room.id}><td><strong className="room-code">{room.roomCode}</strong></td><td>{room.areaSquareMeters} m²</td><td>{room.capacity} người</td><td className="rent-cell">{money(room.monthlyRent)}</td><td>{money(room.depositAmount)}</td><td><RoomStatus status={room.status} /></td></tr>)}</tbody></table>{!rooms.length && <div className="table-empty">Chưa có phòng tại bất động sản này. Dùng nút “Thêm phòng” để bắt đầu.</div>}</div><div className="table-foot"><span>Hiển thị <strong>{rooms.length}</strong> phòng</span><span>Dữ liệu thuộc tổ chức hiện tại <ShieldCheck size={14} /></span></div></>}</section>;
+function PropertiesPage({ properties, rooms, selected, search, busy, onSearch, onSelect, onAddRoom, onAddProperty, onChangeRoomStatus }: { properties: Property[]; rooms: Room[]; selected: string; search: string; busy: boolean; onSearch: (value: string) => void; onSelect: (id: string) => void; onAddRoom: () => void; onAddProperty: () => void; onChangeRoomStatus: (room: Room, status: RoomStatusValue) => void }) {
+  return <section className="panel data-panel"><div className="data-toolbar"><div className="property-select-wrap"><span className="toolbar-label">BẤT ĐỘNG SẢN</span><select className="property-select" value={selected} onChange={(event) => onSelect(event.target.value)}><option value="">Chọn bất động sản</option>{properties.map((property) => <option key={property.id} value={property.id}>{property.name}</option>)}</select></div><div className="table-actions"><label className="search-box"><Search size={16} /><input placeholder="Tìm phòng..." value={search} onChange={(event) => onSearch(event.target.value)} /></label><button className="button button-secondary" onClick={onAddRoom} disabled={!selected}><Plus size={15} /> Thêm phòng</button></div></div>{!properties.length ? <EmptyInline icon={Building2} title="Chưa có bất động sản nào" text="Thêm nhà trọ hoặc căn hộ để bắt đầu quản lý phòng." action="Thêm nhà" onClick={onAddProperty} /> : <><div className="selected-property-line"><span className="property-pin"><Building2 size={17} /></span><span><strong>{properties.find((property) => property.id === selected)?.name}</strong><small>{properties.find((property) => property.id === selected)?.address}</small></span><span className="room-count"><strong>{rooms.length}</strong> phòng</span></div><div className="table-wrap"><table><thead><tr><th>MÃ PHÒNG</th><th>DIỆN TÍCH</th><th>SỨC CHỨA</th><th>GIÁ THUÊ / THÁNG</th><th>TIỀN CỌC</th><th>TÌNH TRẠNG</th><th>THAO TÁC</th></tr></thead><tbody>{rooms.map((room) => <tr key={room.id}><td><strong className="room-code">{room.roomCode}</strong></td><td>{room.areaSquareMeters} m²</td><td>{room.capacity} người</td><td className="rent-cell">{money(room.monthlyRent)}</td><td>{money(room.depositAmount)}</td><td><RoomStatus status={room.status} /></td><td>{room.status !== 'OCCUPIED' && <button className="button button-small button-secondary" disabled={busy} onClick={() => onChangeRoomStatus(room, room.status === 'AVAILABLE' ? 'MAINTENANCE' : 'AVAILABLE')}>{room.status === 'AVAILABLE' ? 'Bảo trì' : 'Mở lại'}</button>}</td></tr>)}</tbody></table>{!rooms.length && <div className="table-empty">Chưa có phòng tại bất động sản này. Dùng nút “Thêm phòng” để bắt đầu.</div>}</div><div className="table-foot"><span>Hiển thị <strong>{rooms.length}</strong> phòng</span><span>Dữ liệu thuộc tổ chức hiện tại <ShieldCheck size={14} /></span></div></>}</section>;
 }
 function RoomStatus({ status }: { status: Room['status'] }) { const copy = { AVAILABLE: ['Trống', 'green'], OCCUPIED: ['Đang thuê', 'blue'], MAINTENANCE: ['Bảo trì', 'amber'], INACTIVE: ['Ngừng hoạt động', 'gray'] } as const; const [text, tone] = copy[status]; return <span className={`room-status ${tone}`}><i />{text}</span>; }
 
 function TenantsPage({ tenants, onAdd }: { tenants: Tenant[]; onAdd: () => void }) { return <section className="panel data-panel"><div className="data-toolbar"><div><span className="toolbar-label">DANH BẠ NGƯỜI THUÊ</span><div className="toolbar-subtitle">Thông tin được giới hạn trong tổ chức của bạn.</div></div><button className="button button-primary" onClick={onAdd}><Plus size={16} /> Thêm người thuê</button></div>{tenants.length ? <div className="table-wrap"><table><thead><tr><th>HỌ VÀ TÊN</th><th>SỐ ĐIỆN THOẠI</th><th>EMAIL</th><th>TRẠNG THÁI</th></tr></thead><tbody>{tenants.map((tenant, index) => <tr key={tenant.id}><td><span className="tenant-name"><span className={`tenant-avatar avatar-color-${index % 4}`}>{tenant.fullName.slice(-1)}</span><strong>{tenant.fullName}</strong></span></td><td>{tenant.phone || '—'}</td><td>{tenant.email || '—'}</td><td><span className="room-status green"><i />Đang lưu hồ sơ</span></td></tr>)}</tbody></table></div> : <EmptyInline icon={Users} title="Danh bạ còn trống" text="Tạo hồ sơ người thuê trước khi thêm hợp đồng." action="Thêm người thuê" onClick={onAdd} />}</section>; }
 
-function ContractsPage({ contracts, rooms, tenants, busy, onAdd, onActivate }: { contracts: Contract[]; rooms: Room[]; tenants: Tenant[]; busy: boolean; onAdd: () => void; onActivate: (contract: Contract) => void }) {
+function ContractsPage({ contracts, rooms, tenants, busy, onAdd, onActivate, onTerminate, onViewHandover }: { contracts: Contract[]; rooms: Room[]; tenants: Tenant[]; busy: boolean; onAdd: () => void; onActivate: (contract: Contract) => void; onTerminate: (contract: Contract) => void; onViewHandover: (contract: Contract) => void }) {
   return <section className="panel data-panel">
-    <div className="data-toolbar"><div><span className="toolbar-label">HỒ SƠ THUÊ NHÀ</span><div className="toolbar-subtitle">Hợp đồng chỉ có hiệu lực sau khi được kích hoạt.</div></div><button className="button button-primary" onClick={onAdd} disabled={!rooms.length || !tenants.length}><Plus size={16} /> Tạo hợp đồng</button></div>
-    {contracts.length ? <div className="table-wrap"><table><thead><tr><th>NGƯỜI THUÊ</th><th>PHÒNG</th><th>THỜI HẠN</th><th>TIỀN THUÊ / THÁNG</th><th>TRẠNG THÁI</th><th>THAO TÁC</th></tr></thead><tbody>{contracts.map((contract) => <tr key={contract.id}><td><strong>{tenants.find((tenant) => tenant.id === contract.tenantId)?.fullName ?? 'Người thuê'}</strong></td><td>{rooms.find((room) => room.id === contract.roomId)?.roomCode ?? '—'}</td><td>{new Intl.DateTimeFormat('vi-VN').format(new Date(`${contract.startDate}T00:00:00`))} – {new Intl.DateTimeFormat('vi-VN').format(new Date(`${contract.endDate}T00:00:00`))}</td><td className="rent-cell">{money(contract.monthlyRent)}</td><td><span className={`status-badge status-${contract.status.toLowerCase()}`}>{contract.status === 'ACTIVE' ? 'Đang hiệu lực' : contract.status === 'DRAFT' ? 'Bản nháp' : 'Đã thanh lý'}</span></td><td>{contract.status === 'DRAFT' && <button className="button button-small button-primary" disabled={busy} onClick={() => onActivate(contract)}>Kích hoạt</button>}</td></tr>)}</tbody></table></div> : <EmptyInline icon={FileText} title="Chưa có hợp đồng" text={rooms.length && tenants.length ? 'Tạo hợp đồng để gắn người thuê với phòng.' : 'Cần tạo ít nhất một phòng và một hồ sơ người thuê trước.'} action="Tạo hợp đồng" onClick={onAdd} />}
+    <div className="data-toolbar"><div><span className="toolbar-label">HỒ SƠ THUÊ NHÀ</span><div className="toolbar-subtitle">Hợp đồng chỉ có hiệu lực sau khi kích hoạt và giải phóng phòng khi thanh lý.</div></div><button className="button button-primary" onClick={onAdd} disabled={!rooms.length || !tenants.length}><Plus size={16} /> Tạo hợp đồng</button></div>
+    {contracts.length ? <div className="table-wrap"><table><thead><tr><th>NGƯỜI THUÊ</th><th>PHÒNG</th><th>THỜI HẠN</th><th>TIỀN THUÊ / THÁNG</th><th>TIỀN CỌC</th><th>TRẠNG THÁI</th><th>THAO TÁC</th></tr></thead><tbody>{contracts.map((contract) => <tr key={contract.id}><td><strong>{tenants.find((tenant) => tenant.id === contract.tenantId)?.fullName ?? 'Người thuê'}</strong></td><td>{rooms.find((room) => room.id === contract.roomId)?.roomCode ?? '—'}</td><td>{new Intl.DateTimeFormat('vi-VN').format(new Date(`${contract.startDate}T00:00:00`))} – {new Intl.DateTimeFormat('vi-VN').format(new Date(`${contract.endDate}T00:00:00`))}</td><td className="rent-cell">{money(contract.monthlyRent)}</td><td>{money(contract.depositAmount)}</td><td><span className={`status-badge status-${contract.status.toLowerCase()}`}>{contract.status === 'ACTIVE' ? 'Đang hiệu lực' : contract.status === 'DRAFT' ? 'Bản nháp' : 'Đã thanh lý'}</span></td><td><div className="row-actions">{contract.status === 'DRAFT' && <button className="button button-small button-primary" disabled={busy} onClick={() => onActivate(contract)}>Kích hoạt</button>}{contract.status === 'ACTIVE' && <button className="button button-small button-secondary" disabled={busy} onClick={() => onTerminate(contract)}>Thanh lý</button>}{contract.status === 'TERMINATED' && <button className="button button-small button-secondary" disabled={busy} onClick={() => onViewHandover(contract)}>Biên bản</button>}</div></td></tr>)}</tbody></table></div> : <EmptyInline icon={FileText} title="Chưa có hợp đồng" text={rooms.length && tenants.length ? 'Tạo hợp đồng để gắn người thuê với phòng.' : 'Cần tạo ít nhất một phòng và một hồ sơ người thuê trước.'} action="Tạo hợp đồng" onClick={onAdd} />}
+  </section>;
+}
+
+function MaintenancePage({ tickets, rooms, busy, onAdd, onAssign, onTransition }: { tickets: MaintenanceTicket[]; rooms: Room[]; busy: boolean; onAdd: () => void; onAssign: (ticket: MaintenanceTicket) => void; onTransition: (ticket: MaintenanceTicket, status: TicketStatus) => void }) {
+  const statusLabel: Record<TicketStatus, string> = {
+    OPEN: 'Mới tạo', ASSIGNED: 'Đã phân công', IN_PROGRESS: 'Đang sửa', ON_HOLD: 'Tạm hoãn',
+    RESOLVED: 'Đã xử lý', CLOSED: 'Đã đóng', REOPENED: 'Mở lại',
+  };
+  const priorityLabel: Record<TicketPriority, string> = { LOW: 'Thấp', MEDIUM: 'Trung bình', HIGH: 'Cao', URGENT: 'Khẩn cấp' };
+  return <section className="panel data-panel">
+    <div className="data-toolbar"><div><span className="toolbar-label">YÊU CẦU BẢO TRÌ</span><div className="toolbar-subtitle">Theo dõi trạng thái sửa chữa, người phụ trách và chi phí thực tế.</div></div><button className="button button-primary" onClick={onAdd} disabled={!rooms.length}><Plus size={16} /> Tạo yêu cầu bảo trì</button></div>
+    {tickets.length ? <div className="table-wrap"><table><thead><tr><th>PHÒNG</th><th>TIÊU ĐỀ</th><th>MỨC ĐỘ</th><th>PHỤ TRÁCH</th><th>CHI PHÍ DỰ KIẾN / THỰC TẾ</th><th>TRẠNG THÁI</th><th>THAO TÁC</th></tr></thead><tbody>{tickets.map((ticket) => <tr key={ticket.id}><td><strong className="room-code">{rooms.find((room) => room.id === ticket.roomId)?.roomCode ?? '—'}</strong></td><td><strong>{ticket.title}</strong><div style={{ fontSize: 11, color: '#68707e' }}>{ticket.description}</div></td><td>{priorityLabel[ticket.priority]}</td><td>{ticket.assigneeName || 'Chưa phân công'}</td><td>{money(ticket.estimatedCost)} / <strong>{money(ticket.actualCost)}</strong></td><td><span className={`status-badge status-${ticket.status.toLowerCase()}`}>{statusLabel[ticket.status]}</span></td><td><div className="row-actions">{(ticket.status === 'OPEN' || ticket.status === 'REOPENED') && <button className="button button-small button-secondary" disabled={busy} onClick={() => onAssign(ticket)}>Phân công</button>}{(ticket.status === 'ASSIGNED' || ticket.status === 'ON_HOLD' || ticket.status === 'OPEN') && <button className="button button-small button-secondary" disabled={busy} onClick={() => onTransition(ticket, 'IN_PROGRESS')}>Xử lý</button>}{(ticket.status === 'ASSIGNED' || ticket.status === 'IN_PROGRESS' || ticket.status === 'REOPENED') && <button className="button button-small button-primary" disabled={busy} onClick={() => onTransition(ticket, 'RESOLVED')}>Hoàn tất</button>}{ticket.status === 'RESOLVED' && <button className="button button-small button-secondary" disabled={busy} onClick={() => onTransition(ticket, 'CLOSED')}>Đóng</button>}{ticket.status === 'CLOSED' && <button className="button button-small button-secondary" disabled={busy} onClick={() => onTransition(ticket, 'REOPENED')}>Mở lại</button>}</div></td></tr>)}</tbody></table></div> : <EmptyInline icon={Wrench} title="Chưa có yêu cầu bảo trì" text={rooms.length ? 'Ghi nhận sự cố phòng để phân công và theo dõi chi phí.' : 'Cần tạo phòng trước khi lập yêu cầu bảo trì.'} action="Tạo yêu cầu" onClick={onAdd} />}
   </section>;
 }
 
@@ -230,5 +317,71 @@ function TariffForm({ busy, onCancel, onSubmit }: { busy: boolean; onCancel: () 
 function periodStart(period: string) { return `${period}-01`; }
 function ReadingForm({ rooms, period, tariffs, busy, onCancel, onSubmit, onAddTariff }: { rooms: Room[]; period: string; tariffs: Tariff[]; busy: boolean; onCancel: () => void; onSubmit: (body: { roomId: string; utilityType: UtilityType; billingPeriod: string; currentReading: number }) => void; onAddTariff: () => void }) { const [roomId, setRoomId] = useState(rooms[0]?.id ?? ''); const [utilityType, setUtilityType] = useState<UtilityType>('ELECTRICITY'); const [currentReading, setCurrentReading] = useState(''); const hasTariff = tariffs.some((tariff) => tariff.utilityType === utilityType && tariff.effectiveFrom <= `${period}-31`); return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); onSubmit({ roomId, utilityType, billingPeriod: period, currentReading: Number(currentReading) }); }}><label>Phòng<select required value={roomId} onChange={(event) => setRoomId(event.target.value)}>{rooms.map((room) => <option key={room.id} value={room.id}>{room.roomCode}</option>)}</select></label><div className="form-row"><label>Dịch vụ<select value={utilityType} onChange={(event) => setUtilityType(event.target.value as UtilityType)}><option value="ELECTRICITY">Điện</option><option value="WATER">Nước</option></select></label><label>Kỳ hóa đơn<input type="month" required value={period} readOnly /></label></div><label>Chỉ số mới<input required type="number" min="0" step="0.001" autoFocus value={currentReading} onChange={(event) => setCurrentReading(event.target.value)} placeholder="Ví dụ: 1280" /></label>{!hasTariff && <div className="form-note warning-note"><CircleHelp size={15} /> Chưa có đơn giá cho dịch vụ/kỳ này. <button type="button" onClick={onAddTariff}>Cấu hình ngay</button></div>}<FormActions busy={busy} onCancel={onCancel} submitLabel="Lưu chỉ số" /></form>; }
 function PaymentForm({ invoice, busy, onCancel, onSubmit }: { invoice: Invoice; busy: boolean; onCancel: () => void; onSubmit: (body: { amount: number; method: 'CASH' | 'BANK_TRANSFER'; reference: string; idempotencyKey: string }) => void }) { const [amount, setAmount] = useState(`${invoice.balanceDue}`); const [method, setMethod] = useState<'CASH' | 'BANK_TRANSFER'>('BANK_TRANSFER'); const [reference, setReference] = useState(''); return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); onSubmit({ amount: Number(amount), method, reference, idempotencyKey: crypto.randomUUID() }); }}><div className="payment-summary"><span>Khoản còn phải thu<strong>{money(invoice.balanceDue)}</strong></span><span>Kỳ hóa đơn<strong>{invoice.billingPeriod}</strong></span></div><label>Số tiền nhận (₫)<input required type="number" min="1" max={invoice.balanceDue} step="1" autoFocus value={amount} onChange={(event) => setAmount(event.target.value)} /></label><label>Hình thức<select value={method} onChange={(event) => setMethod(event.target.value as 'CASH' | 'BANK_TRANSFER')}><option value="BANK_TRANSFER">Chuyển khoản (ghi nhận thủ công)</option><option value="CASH">Tiền mặt</option></select></label><label>Mã tham chiếu / ghi chú<input required maxLength={120} value={reference} onChange={(event) => setReference(event.target.value)} placeholder="Ví dụ: UNC-2026-001 hoặc Thu tiền mặt" /></label><div className="form-note"><CircleHelp size={15} /> Bản ghi này không xác minh giao dịch ngân hàng.</div><FormActions busy={busy} onCancel={onCancel} submitLabel="Ghi nhận thanh toán" /></form>; }
+
+function TerminateContractForm({ contract, busy, onCancel, onSubmit }: { contract: Contract; busy: boolean; onCancel: () => void; onSubmit: (body: { terminatedDate: string; depositDeducted: number; finalElectricityReading?: number; finalWaterReading?: number; checklistNotes?: string }) => void }) {
+  const [terminatedDate, setTerminatedDate] = useState(new Date().toISOString().slice(0, 10));
+  const [depositDeducted, setDepositDeducted] = useState('0');
+  const [finalElec, setFinalElec] = useState('');
+  const [finalWater, setFinalWater] = useState('');
+  const [notes, setNotes] = useState('');
+  const deductedNum = Number(depositDeducted || 0);
+  const refund = Math.max(0, contract.depositAmount - deductedNum);
+  return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); onSubmit({ terminatedDate, depositDeducted: deductedNum, finalElectricityReading: finalElec ? Number(finalElec) : undefined, finalWaterReading: finalWater ? Number(finalWater) : undefined, checklistNotes: notes || undefined }); }}>
+    <div className="payment-summary"><span>Tiền cọc đang giữ<strong>{money(contract.depositAmount)}</strong></span><span>Hoàn trả dự kiến<strong>{money(refund)}</strong></span></div>
+    <label>Ngày bàn giao / chấm dứt<input required type="date" min={contract.startDate} value={terminatedDate} onChange={(event) => setTerminatedDate(event.target.value)} /></label>
+    <label>Khấu trừ tiền cọc (₫)<input required type="number" min="0" max={contract.depositAmount} step="1000" value={depositDeducted} onChange={(event) => setDepositDeducted(event.target.value)} /></label>
+    <div className="form-row"><label>Chốt chỉ số điện cuối<input type="number" min="0" step="0.001" value={finalElec} onChange={(event) => setFinalElec(event.target.value)} /></label><label>Chốt chỉ số nước cuối<input type="number" min="0" step="0.001" value={finalWater} onChange={(event) => setFinalWater(event.target.value)} /></label></div>
+    <label>Ghi chú biên bản bàn giao<input maxLength={1000} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Đã kiểm tra thiết bị, nhận đủ chìa khóa" /></label>
+    <div className="form-note"><ShieldCheck size={15} /> Mọi hóa đơn trong hợp đồng phải được thanh toán trước khi bàn giao trả phòng.</div>
+    <FormActions busy={busy} onCancel={onCancel} submitLabel="Xác nhận thanh lý" />
+  </form>;
+}
+
+function HandoverSummary({ handover, onClose }: { handover: HandoverRecord; onClose: () => void }) {
+  return <div className="modal-form">
+    <div className="payment-summary"><span>Cọc giữ<strong>{money(handover.depositHeld)}</strong></span><span>Khấu trừ<strong>{money(handover.depositDeducted)}</strong></span><span>Hoàn trả<strong>{money(handover.depositRefunded)}</strong></span></div>
+    <div style={{ display: 'grid', gap: 6, fontSize: 12 }}>
+      <div><strong>Ngày bàn giao:</strong> {handover.terminatedDate}</div>
+      <div><strong>Dư nợ hóa đơn tại thời điểm bàn giao:</strong> {money(handover.outstandingBalance)}</div>
+      {handover.finalElectricityReading != null && <div><strong>Chỉ số điện cuối:</strong> {handover.finalElectricityReading}</div>}
+      {handover.finalWaterReading != null && <div><strong>Chỉ số nước cuối:</strong> {handover.finalWaterReading}</div>}
+      <div><strong>Ghi chú:</strong> {handover.checklistNotes || '—'}</div>
+    </div>
+    <div className="form-actions"><button className="button button-primary" type="button" onClick={onClose}>Đóng</button></div>
+  </div>;
+}
+
+function TicketForm({ rooms, busy, onCancel, onSubmit }: { rooms: Room[]; busy: boolean; onCancel: () => void; onSubmit: (body: { roomId: string; title: string; description: string; priority: TicketPriority; estimatedCost: number }) => void }) {
+  const [roomId, setRoomId] = useState(rooms[0]?.id ?? '');
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [priority, setPriority] = useState<TicketPriority>('MEDIUM');
+  const [estimatedCost, setEstimatedCost] = useState('0');
+  return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); onSubmit({ roomId, title, description, priority, estimatedCost: Number(estimatedCost || 0) }); }}>
+    <label>Phòng<select required value={roomId} onChange={(event) => setRoomId(event.target.value)}>{rooms.map((room) => <option key={room.id} value={room.id}>{room.roomCode}</option>)}</select></label>
+    <label>Tiêu đề sự cố<input required maxLength={160} autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Ví dụ: Hỏng máy lạnh / Rò nước" /></label>
+    <label>Mô tả chi tiết<input required maxLength={1000} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Mô tả tình trạng thiết bị" /></label>
+    <div className="form-row"><label>Mức độ ưu tiên<select value={priority} onChange={(event) => setPriority(event.target.value as TicketPriority)}><option value="LOW">Thấp</option><option value="MEDIUM">Trung bình</option><option value="HIGH">Cao</option><option value="URGENT">Khẩn cấp</option></select></label><label>Chi phí dự kiến (₫)<input required type="number" min="0" step="1000" value={estimatedCost} onChange={(event) => setEstimatedCost(event.target.value)} /></label></div>
+    <FormActions busy={busy} onCancel={onCancel} submitLabel="Tạo yêu cầu" />
+  </form>;
+}
+
+function AssignTicketForm({ ticket, busy, onCancel, onSubmit }: { ticket: MaintenanceTicket; busy: boolean; onCancel: () => void; onSubmit: (assigneeName: string) => void }) {
+  const [assigneeName, setAssigneeName] = useState(ticket.assigneeName ?? '');
+  return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); onSubmit(assigneeName); }}>
+    <label>Nhân viên / đơn vị phụ trách<input required maxLength={120} autoFocus value={assigneeName} onChange={(event) => setAssigneeName(event.target.value)} placeholder="Ví dụ: Anh Tùng Kỹ Thuật" /></label>
+    <FormActions busy={busy} onCancel={onCancel} submitLabel="Xác nhận phân công" />
+  </form>;
+}
+
+function ResolveTicketForm({ ticket, busy, onCancel, onSubmit }: { ticket: MaintenanceTicket; busy: boolean; onCancel: () => void; onSubmit: (body: { actualCost: number; resolutionNotes?: string }) => void }) {
+  const [actualCost, setActualCost] = useState(`${ticket.estimatedCost || 0}`);
+  const [resolutionNotes, setResolutionNotes] = useState('');
+  return <form className="modal-form" onSubmit={(event) => { event.preventDefault(); onSubmit({ actualCost: Number(actualCost || 0), resolutionNotes: resolutionNotes || undefined }); }}>
+    <label>Chi phí thực tế (₫)<input required type="number" min="0" step="1000" autoFocus value={actualCost} onChange={(event) => setActualCost(event.target.value)} /></label>
+    <label>Ghi chú kết quả sửa chữa<input maxLength={1000} value={resolutionNotes} onChange={(event) => setResolutionNotes(event.target.value)} placeholder="Đã thay thế linh kiện, kiểm tra vận hành bình thường" /></label>
+    <FormActions busy={busy} onCancel={onCancel} submitLabel="Hoàn tất sửa chữa" />
+  </form>;
+}
 
 export default App;

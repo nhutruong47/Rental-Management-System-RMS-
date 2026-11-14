@@ -48,6 +48,9 @@ public class RentalContract {
     @Column(name = "monthly_rent", nullable = false, precision = 19, scale = 0)
     private BigDecimal monthlyRent;
 
+    @Column(name = "deposit_amount", nullable = false, precision = 19, scale = 0)
+    private BigDecimal depositAmount = BigDecimal.ZERO;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private ContractStatus status = ContractStatus.DRAFT;
@@ -62,22 +65,31 @@ public class RentalContract {
     protected RentalContract() { }
 
     public RentalContract(Organization organization, Room room, Tenant tenant,
-                          LocalDate startDate, LocalDate endDate, BigDecimal monthlyRent) {
+                          LocalDate startDate, LocalDate endDate, BigDecimal monthlyRent, BigDecimal depositAmount) {
         this.organization = organization;
         this.room = room;
         this.tenant = tenant;
         this.startDate = startDate;
         this.endDate = endDate;
         this.monthlyRent = monthlyRent;
+        this.depositAmount = depositAmount == null ? BigDecimal.ZERO : depositAmount;
     }
 
     public void activate() { this.status = ContractStatus.ACTIVE; }
+    public void terminate() {
+        if (this.status != ContractStatus.ACTIVE) {
+            throw new IllegalStateException("Only active contracts can be terminated");
+        }
+        this.status = ContractStatus.TERMINATED;
+    }
     public UUID getId() { return id; }
     public UUID getOrganizationId() { return organization.getId(); }
+    public Organization getOrganization() { return organization; }
     public UUID getRoomId() { return room.getId(); }
     public UUID getTenantId() { return tenant.getId(); }
     public LocalDate getStartDate() { return startDate; }
     public LocalDate getEndDate() { return endDate; }
     public BigDecimal getMonthlyRent() { return monthlyRent; }
+    public BigDecimal getDepositAmount() { return depositAmount; }
     public ContractStatus getStatus() { return status; }
 }

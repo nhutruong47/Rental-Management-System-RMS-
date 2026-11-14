@@ -1,4 +1,5 @@
 export type Property = { id: string; name: string; address: string };
+export type RoomStatusValue = 'AVAILABLE' | 'OCCUPIED' | 'MAINTENANCE' | 'INACTIVE';
 export type Room = {
   id: string;
   propertyId: string;
@@ -7,7 +8,7 @@ export type Room = {
   capacity: number;
   monthlyRent: number;
   depositAmount: number;
-  status: 'AVAILABLE' | 'OCCUPIED' | 'MAINTENANCE' | 'INACTIVE';
+  status: RoomStatusValue;
 };
 export type Tenant = { id: string; fullName: string; phone?: string; email?: string };
 export type Contract = {
@@ -17,7 +18,21 @@ export type Contract = {
   startDate: string;
   endDate: string;
   monthlyRent: number;
+  depositAmount: number;
   status: 'DRAFT' | 'ACTIVE' | 'TERMINATED';
+};
+export type HandoverRecord = {
+  id: string;
+  contractId: string;
+  terminatedDate: string;
+  finalElectricityReading?: number;
+  finalWaterReading?: number;
+  outstandingBalance: number;
+  depositHeld: number;
+  depositDeducted: number;
+  depositRefunded: number;
+  checklistNotes?: string;
+  createdAt: string;
 };
 export type Invoice = {
   id: string;
@@ -45,6 +60,30 @@ export type MeterReading = {
   usage: number;
   unitPrice: number;
   charge: number;
+};
+export type TicketPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+export type TicketStatus = 'OPEN' | 'ASSIGNED' | 'IN_PROGRESS' | 'ON_HOLD' | 'RESOLVED' | 'CLOSED' | 'REOPENED';
+export type MaintenanceTicket = {
+  id: string;
+  roomId: string;
+  title: string;
+  description: string;
+  priority: TicketPriority;
+  status: TicketStatus;
+  assigneeName?: string;
+  estimatedCost: number;
+  actualCost: number;
+  resolutionNotes?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+export type AppNotification = {
+  id: string;
+  eventType: string;
+  title: string;
+  message: string;
+  read: boolean;
+  createdAt: string;
 };
 export type SessionAccount = {
   userId: string;
@@ -120,9 +159,14 @@ export const api = {
   contracts: () => request<Contract[]>('/api/contracts'),
   createContract: (body: { roomId: string; tenantId: string; startDate: string; endDate: string }) => request<Contract>('/api/contracts', { method: 'POST', body: JSON.stringify(body) }),
   activateContract: (id: string) => request<Contract>(`/api/contracts/${id}/activate`, { method: 'POST' }),
+  terminateContract: (id: string, body: { terminatedDate: string; depositDeducted?: number; finalElectricityReading?: number; finalWaterReading?: number; checklistNotes?: string }) =>
+    request<HandoverRecord>(`/api/contracts/${id}/terminate`, { method: 'POST', body: JSON.stringify(body) }),
+  handover: (contractId: string) => request<HandoverRecord>(`/api/contracts/${contractId}/handover`),
   rooms: (propertyId: string) => request<Room[]>(`/api/properties/${propertyId}/rooms`),
   createProperty: (body: { name: string; address: string }) => request<Property>('/api/properties', { method: 'POST', body: JSON.stringify(body) }),
   createRoom: (propertyId: string, body: { roomCode: string; areaSquareMeters: number; capacity: number; monthlyRent: number; depositAmount: number }) => request<Room>(`/api/properties/${propertyId}/rooms`, { method: 'POST', body: JSON.stringify(body) }),
+  updateRoomStatus: (propertyId: string, roomId: string, status: RoomStatusValue) =>
+    request<Room>(`/api/properties/${propertyId}/rooms/${roomId}/status`, { method: 'POST', body: JSON.stringify({ status }) }),
   tenants: () => request<Tenant[]>('/api/tenants'),
   createTenant: (body: { fullName: string; phone?: string; email?: string }) => request<Tenant>('/api/tenants', { method: 'POST', body: JSON.stringify(body) }),
   tariffs: () => request<Tariff[]>('/api/utility-tariffs'),
@@ -133,4 +177,13 @@ export const api = {
   generateInvoices: (billingPeriod: string) => request<Invoice[]>('/api/invoices/generate', { method: 'POST', body: JSON.stringify({ billingPeriod }) }),
   issueInvoice: (id: string) => request<Invoice>(`/api/invoices/${id}/issue`, { method: 'POST' }),
   recordPayment: (id: string, body: { amount: number; method: 'CASH' | 'BANK_TRANSFER'; reference: string; idempotencyKey: string }) => request(`/api/invoices/${id}/payments`, { method: 'POST', body: JSON.stringify(body) }),
+  maintenanceTickets: () => request<MaintenanceTicket[]>('/api/maintenance-tickets'),
+  createTicket: (body: { roomId: string; title: string; description: string; priority: TicketPriority; estimatedCost: number }) =>
+    request<MaintenanceTicket>('/api/maintenance-tickets', { method: 'POST', body: JSON.stringify(body) }),
+  assignTicket: (id: string, assigneeName: string) =>
+    request<MaintenanceTicket>(`/api/maintenance-tickets/${id}/assign`, { method: 'POST', body: JSON.stringify({ assigneeName }) }),
+  updateTicketStatus: (id: string, body: { status: TicketStatus; actualCost?: number; resolutionNotes?: string }) =>
+    request<MaintenanceTicket>(`/api/maintenance-tickets/${id}/status`, { method: 'POST', body: JSON.stringify(body) }),
+  notifications: () => request<AppNotification[]>('/api/notifications'),
+  markNotificationRead: (id: string) => request<AppNotification>(`/api/notifications/${id}/read`, { method: 'POST' }),
 };

@@ -64,6 +64,16 @@ public class PropertyController {
                 request.capacity(), request.monthlyRent(), request.depositAmount());
     }
 
+    @PostMapping("/{propertyId}/rooms/{roomId}/status")
+    public PropertyService.RoomResponse updateRoomStatus(@AuthenticationPrincipal RmsUserPrincipal principal,
+                                                         @PathVariable UUID propertyId,
+                                                         @PathVariable UUID roomId,
+                                                         @Valid @RequestBody UpdateRoomStatusRequest request) {
+        return service.updateRoomStatus(principal.organizationId(), propertyId, roomId, request.status());
+    }
+
+    public record UpdateRoomStatusRequest(@NotNull RoomStatus status) { }
+
     public record CreatePropertyRequest(@NotBlank @Size(max = 120) String name,
                                         @NotBlank @Size(max = 300) String address) { }
 

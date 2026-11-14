@@ -12,6 +12,7 @@ import org.springframework.web.server.ResponseStatusException;
 import vn.rms.contract.ContractRepository;
 import vn.rms.contract.ContractStatus;
 import vn.rms.identity.OrganizationRepository;
+import vn.rms.notification.NotificationService;
 import vn.rms.utility.MeterReading;
 import vn.rms.utility.MeterReadingRepository;
 import vn.rms.utility.UtilityType;
@@ -24,14 +25,17 @@ public class BillingService {
     private final ContractRepository contracts;
     private final MeterReadingRepository readings;
     private final OrganizationRepository organizations;
+    private final NotificationService notifications;
 
     public BillingService(InvoiceRepository invoices, PaymentRepository payments, ContractRepository contracts,
-                          MeterReadingRepository readings, OrganizationRepository organizations) {
+                          MeterReadingRepository readings, OrganizationRepository organizations,
+                          NotificationService notifications) {
         this.invoices = invoices;
         this.payments = payments;
         this.contracts = contracts;
         this.readings = readings;
         this.organizations = organizations;
+        this.notifications = notifications;
     }
 
     public List<RentalInvoice> generate(UUID organizationId, YearMonth period) {
@@ -61,6 +65,9 @@ public class BillingService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Only draft invoices can be issued");
         }
         invoice.issue();
+        notifications.record(organizationId, "INVOICE_ISSUED",
+                "Đã phát hành hóa đơn",
+                "Kỳ " + invoice.getBillingPeriod() + " · Tổng thu " + invoice.getTotalAmount() + " VND");
         return invoice;
     }
 
@@ -85,6 +92,9 @@ public class BillingService {
             invoice.applyPayment(amount);
             ManualPayment payment = payments.saveAndFlush(new ManualPayment(organizations.getReferenceById(organizationId),
                     invoice, amount, method, reference, idempotencyKey, userId));
+            notifications.record(organizationId, "PAYMENT_RECORDED",
+                    "Ghi nhận thanh toán",
+                    "Kỳ " + invoice.getBillingPeriod() + " · +" + amount + " VND (" + reference + ")");
             return PaymentResult.from(payment, invoice);
         } catch (DataIntegrityViolationException ex) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Duplicate payment request");

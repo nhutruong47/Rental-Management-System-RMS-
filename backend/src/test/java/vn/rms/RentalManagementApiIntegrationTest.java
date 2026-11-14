@@ -424,6 +424,181 @@ class RentalManagementApiIntegrationTest {
                 .andExpect(jsonPath("$.status").value("ISSUED"));
     }
 
+    @Test
+    void roomStatusCannotBeManuallyChangedWhileOccupied() throws Exception {
+        MockHttpSession session = registerAndSignIn("room-status-" + UUID.randomUUID() + "@example.test", "Nhà Trạng Thái");
+        String propertyId = createProperty(session);
+        createRoom(session, propertyId, "S01", 3000000).andExpect(status().isCreated());
+        String roomId = jsonValue(mockMvc.perform(authenticated(get("/api/properties/" + propertyId + "/rooms"), session))
+                .andExpect(status().isOk()).andReturn(), "$[0].id");
+
+        mockMvc.perform(authenticated(post("/api/properties/" + propertyId + "/rooms/" + roomId + "/status"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status":"MAINTENANCE"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("MAINTENANCE"));
+
+        mockMvc.perform(authenticated(post("/api/properties/" + propertyId + "/rooms/" + roomId + "/status"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status":"AVAILABLE"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("AVAILABLE"));
+
+        String tenantId = createTenant(session);
+        String contractId = createContract(session, roomId, tenantId, "2026-11-01", "2027-10-31");
+        mockMvc.perform(authenticated(post("/api/contracts/" + contractId + "/activate"), session))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(authenticated(post("/api/properties/" + propertyId + "/rooms/" + roomId + "/status"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status":"AVAILABLE"}
+                                """))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void ownerCanTerminateActiveContractAfterSettlingInvoicesAndReleaseRoom() throws Exception {
+        MockHttpSession session = registerAndSignIn("checkout-" + UUID.randomUUID() + "@example.test", "Nhà Bàn Giao");
+        String propertyId = createProperty(session);
+        createRoom(session, propertyId, "H01", 3000000).andExpect(status().isCreated());
+        String roomId = jsonValue(mockMvc.perform(authenticated(get("/api/properties/" + propertyId + "/rooms"), session))
+                .andExpect(status().isOk()).andReturn(), "$[0].id");
+        String tenantId = createTenant(session);
+        String contractId = createContract(session, roomId, tenantId, "2026-11-01", "2027-10-31");
+        mockMvc.perform(authenticated(post("/api/contracts/" + contractId + "/activate"), session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.depositAmount").value(2200000));
+
+        MvcResult generated = mockMvc.perform(authenticated(post("/api/invoices/generate"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"billingPeriod":"2026-11"}
+                                """))
+                .andExpect(status().isOk()).andReturn();
+        String invoiceId = jsonValue(generated, "$[0].id");
+        mockMvc.perform(authenticated(post("/api/invoices/" + invoiceId + "/issue"), session))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(authenticated(post("/api/contracts/" + contractId + "/terminate"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"terminatedDate":"2026-11-30","depositDeducted":200000,"checklistNotes":"Chưa thanh toán hóa đơn"}
+                                """))
+                .andExpect(status().isConflict());
+
+        mockMvc.perform(authenticated(post("/api/invoices/" + invoiceId + "/payments"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"amount":3000000,"method":"CASH","reference":"FULL-SETTLE","idempotencyKey":"%s"}
+                                """.formatted(UUID.randomUUID())))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(authenticated(post("/api/contracts/" + contractId + "/terminate"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"terminatedDate":"2026-11-30","depositDeducted":2500000,"checklistNotes":"Vượt tiền cọc"}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(authenticated(post("/api/contracts/" + contractId + "/terminate"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"terminatedDate":"2026-11-30","depositDeducted":200000,"finalElectricityReading":120,"finalWaterReading":8,"checklistNotes":"Bàn giao đủ chìa khóa"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.depositHeld").value(2200000))
+                .andExpect(jsonPath("$.depositDeducted").value(200000))
+                .andExpect(jsonPath("$.depositRefunded").value(2000000));
+
+        mockMvc.perform(authenticated(get("/api/properties/" + propertyId + "/rooms"), session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("AVAILABLE"));
+
+        MockHttpSession otherOwner = registerAndSignIn("checkout-other-" + UUID.randomUUID() + "@example.test", "Nhà Khác");
+        mockMvc.perform(authenticated(get("/api/contracts/" + contractId + "/handover"), otherOwner))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void maintenanceTicketWorkflowEnforcesTransitionsAndOrganizationIsolation() throws Exception {
+        MockHttpSession session = registerAndSignIn("maint-" + UUID.randomUUID() + "@example.test", "Nhà Bảo Trì");
+        String propertyId = createProperty(session);
+        createRoom(session, propertyId, "M101", 3000000).andExpect(status().isCreated());
+        String roomId = jsonValue(mockMvc.perform(authenticated(get("/api/properties/" + propertyId + "/rooms"), session))
+                .andExpect(status().isOk()).andReturn(), "$[0].id");
+
+        MvcResult created = mockMvc.perform(authenticated(post("/api/maintenance-tickets"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"roomId":"%s","title":"Rò rỉ vòi nước","description":"Vòi lavabo nhỏ giọt","priority":"HIGH","estimatedCost":150000}
+                                """.formatted(roomId)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("OPEN"))
+                .andReturn();
+        String ticketId = jsonValue(created, "$.id");
+
+        mockMvc.perform(authenticated(post("/api/maintenance-tickets/" + ticketId + "/status"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status":"RESOLVED","actualCost":120000,"resolutionNotes":"Chưa tiếp nhận"}
+                                """))
+                .andExpect(status().isConflict());
+
+        mockMvc.perform(authenticated(post("/api/maintenance-tickets/" + ticketId + "/assign"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"assigneeName":"Anh Tùng Kỹ Thuật"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ASSIGNED"))
+                .andExpect(jsonPath("$.assigneeName").value("Anh Tùng Kỹ Thuật"));
+
+        mockMvc.perform(authenticated(post("/api/maintenance-tickets/" + ticketId + "/status"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status":"IN_PROGRESS"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("IN_PROGRESS"));
+
+        mockMvc.perform(authenticated(post("/api/maintenance-tickets/" + ticketId + "/status"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status":"RESOLVED","actualCost":120000,"resolutionNotes":"Đã thay ron cao su"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RESOLVED"))
+                .andExpect(jsonPath("$.actualCost").value(120000));
+
+        mockMvc.perform(authenticated(post("/api/maintenance-tickets/" + ticketId + "/status"), session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"status":"CLOSED"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CLOSED"));
+
+        mockMvc.perform(authenticated(get("/api/notifications"), session))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").exists());
+
+        MockHttpSession otherOwner = registerAndSignIn("maint-other-" + UUID.randomUUID() + "@example.test", "Nhà Ngoài");
+        mockMvc.perform(authenticated(get("/api/maintenance-tickets"), otherOwner))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
+        mockMvc.perform(authenticated(post("/api/maintenance-tickets/" + ticketId + "/assign"), otherOwner)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"assigneeName":"Intruder"}
+                                """))
+                .andExpect(status().isNotFound());
+    }
+
     private ResultActions createMeterReading(MockHttpSession session, String roomId, String utilityType,
                                              long currentReading) throws Exception {
         return mockMvc.perform(authenticated(post("/api/meter-readings"), session)

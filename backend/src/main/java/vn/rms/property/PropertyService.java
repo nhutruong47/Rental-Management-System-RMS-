@@ -63,6 +63,21 @@ public class PropertyService {
         return RoomResponse.from(rooms.save(room));
     }
 
+    @Transactional
+    public RoomResponse updateRoomStatus(UUID organizationId, UUID propertyId, UUID roomId, RoomStatus targetStatus) {
+        requireProperty(organizationId, propertyId);
+        Room room = rooms.findByProperty_IdAndIdAndOrganization_Id(propertyId, roomId, organizationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Room not found"));
+        try {
+            room.setOperationalStatus(targetStatus);
+        } catch (IllegalStateException ex) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, ex.getMessage());
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
+        return RoomResponse.from(room);
+    }
+
     private Property requireProperty(UUID organizationId, UUID propertyId) {
         return properties.findByIdAndOrganizationId(propertyId, organizationId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Property not found"));

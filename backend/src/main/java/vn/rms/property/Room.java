@@ -89,4 +89,19 @@ public class Room {
         if (status != RoomStatus.AVAILABLE) throw new IllegalStateException("Only available rooms can be occupied");
         status = RoomStatus.OCCUPIED;
     }
+
+    public void releaseToAvailable() {
+        if (status != RoomStatus.OCCUPIED) throw new IllegalStateException("Only occupied rooms can be released");
+        status = RoomStatus.AVAILABLE;
+    }
+
+    public void setOperationalStatus(RoomStatus target) {
+        if (status == RoomStatus.OCCUPIED) {
+            throw new IllegalStateException("Cannot manually change status of an occupied room");
+        }
+        if (target != RoomStatus.AVAILABLE && target != RoomStatus.MAINTENANCE && target != RoomStatus.INACTIVE) {
+            throw new IllegalArgumentException("Unsupported manual room status: " + target);
+        }
+        status = target;
+    }
 }

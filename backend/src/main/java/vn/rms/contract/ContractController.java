@@ -1,7 +1,9 @@
 package vn.rms.contract;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.UUID;
@@ -44,6 +46,27 @@ public class ContractController {
         return contracts.activateDto(principal.organizationId(), contractId);
     }
 
+    @PostMapping("/{contractId}/terminate")
+    public ContractService.HandoverResponse terminate(@AuthenticationPrincipal RmsUserPrincipal principal,
+                                                      @PathVariable UUID contractId,
+                                                      @Valid @RequestBody TerminateContractRequest request) {
+        return contracts.terminate(principal.organizationId(), principal.userId(), contractId,
+                request.terminatedDate(), request.depositDeducted(), request.finalElectricityReading(),
+                request.finalWaterReading(), request.checklistNotes());
+    }
+
+    @GetMapping("/{contractId}/handover")
+    public ContractService.HandoverResponse handover(@AuthenticationPrincipal RmsUserPrincipal principal,
+                                                     @PathVariable UUID contractId) {
+        return contracts.getHandover(principal.organizationId(), contractId);
+    }
+
     public record CreateContractRequest(@NotNull UUID roomId, @NotNull UUID tenantId,
                                         @NotNull LocalDate startDate, @NotNull LocalDate endDate) { }
+
+    public record TerminateContractRequest(@NotNull LocalDate terminatedDate,
+                                           @DecimalMin("0") BigDecimal depositDeducted,
+                                           @DecimalMin("0") BigDecimal finalElectricityReading,
+                                           @DecimalMin("0") BigDecimal finalWaterReading,
+                                           @Size(max = 1000) String checklistNotes) { }
 }
